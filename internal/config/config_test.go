@@ -47,8 +47,8 @@ func TestLoad_AllRequiredSet(t *testing.T) {
 	if cfg.BridgePort != 8080 {
 		t.Errorf("BridgePort = %d, want %d", cfg.BridgePort, 8080)
 	}
-	if cfg.DatabasePath != "./data/users.db" {
-		t.Errorf("DatabasePath = %q, want %q", cfg.DatabasePath, "./data/users.db")
+	if cfg.DatabasePath != "/data/users.db" {
+		t.Errorf("DatabasePath = %q, want %q", cfg.DatabasePath, "/data/users.db")
 	}
 	if len(cfg.TrustedProxies) != 1 {
 		t.Fatalf("TrustedProxies length = %d, want 1", len(cfg.TrustedProxies))

@@ -97,8 +97,8 @@ func TestCreateUser_Success(t *testing.T) {
 		if body.CopyFromUserID != "template-user-id" {
 			t.Errorf("body.CopyFromUserID = %q, want %q", body.CopyFromUserID, "template-user-id")
 		}
-		if len(body.UserCopyOptions) != 2 || body.UserCopyOptions[0] != "UserPolicy" || body.UserCopyOptions[1] != "UserConfiguration" {
-			t.Errorf("body.UserCopyOptions = %v, want [UserPolicy, UserConfiguration]", body.UserCopyOptions)
+		if len(body.UserCopyOptions) != 1 || body.UserCopyOptions[0] != "UserPolicy" {
+			t.Errorf("body.UserCopyOptions = %v, want [UserPolicy]", body.UserCopyOptions)
 		}
 
 		resp := map[string]interface{}{
@@ -209,6 +209,7 @@ func TestAuthenticateByName_HeaderFormat(t *testing.T) {
 }
 
 func TestUpdatePassword_Success(t *testing.T) {
+	var callCount int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
@@ -220,19 +221,35 @@ func TestUpdatePassword_Success(t *testing.T) {
 			t.Errorf("unexpected api_key: %s", r.URL.Query().Get("api_key"))
 		}
 
-		// Verify request body
+		callCount++
+
 		var body updatePasswordRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("failed to decode request body: %v", err)
 		}
 		if body.ID != "user-123" {
-			t.Errorf("body.ID = %q, want %q", body.ID, "user-123")
+			t.Errorf("call %d: body.ID = %q, want %q", callCount, body.ID, "user-123")
 		}
-		if body.NewPw != "newpass1" {
-			t.Errorf("body.NewPw = %q, want %q", body.NewPw, "newpass1")
-		}
-		if !body.ResetPassword {
-			t.Error("body.ResetPassword = false, want true")
+
+		switch callCount {
+		case 1:
+			// Step 1: Reset password.
+			if !body.ResetPassword {
+				t.Error("call 1: body.ResetPassword = false, want true")
+			}
+			if body.NewPw != "" {
+				t.Errorf("call 1: body.NewPw = %q, want empty", body.NewPw)
+			}
+		case 2:
+			// Step 2: Set new password.
+			if body.ResetPassword {
+				t.Error("call 2: body.ResetPassword = true, want false")
+			}
+			if body.NewPw != "newpass1" {
+				t.Errorf("call 2: body.NewPw = %q, want %q", body.NewPw, "newpass1")
+			}
+		default:
+			t.Errorf("unexpected call %d to Password endpoint", callCount)
 		}
 
 		w.WriteHeader(http.StatusNoContent)
@@ -243,6 +260,9 @@ func TestUpdatePassword_Success(t *testing.T) {
 	err := client.UpdatePassword(context.Background(), "user-123", "newpass1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if callCount != 2 {
+		t.Errorf("expected 2 calls to Password endpoint, got %d", callCount)
 	}
 }
 

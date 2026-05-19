@@ -17,6 +17,9 @@ import (
 
 var errorDBCounter atomic.Int64
 
+// testTemplatePolicy is a valid JSON policy used as the templatePolicy argument in tests.
+var testTemplatePolicy = []byte(`{"IsDisabled":true,"IsHidden":true,"EnableUserPreferenceAccess":true}`)
+
 func errorDBURI() string {
 	n := errorDBCounter.Add(1)
 	return fmt.Sprintf("file:integrationerr%d?mode=memory&cache=shared", n)
@@ -38,7 +41,7 @@ func buildErrorChain(trusted []*net.IPNet, embyClient *emby.Client, database *db
 		w.Write([]byte("proxied"))
 	})
 
-	authMiddleware := middleware.Auth(embyClient, database, "template-user-id")
+	authMiddleware := middleware.Auth(embyClient, database, "template-user-id", testTemplatePolicy)
 	proxyMiddleware := middleware.TrustedProxy(trusted)
 
 	return proxyMiddleware(authMiddleware(finalHandler))

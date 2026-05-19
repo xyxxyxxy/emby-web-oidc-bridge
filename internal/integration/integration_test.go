@@ -34,8 +34,9 @@ type apiCall struct {
 
 // buildFullChain constructs the full middleware chain: TrustedProxy → Auth → Proxy.
 func buildFullChain(trustedCIDRs []*net.IPNet, embyClient *emby.Client, database *db.DB, templateUserID string, backendURL string) http.Handler {
+	templatePolicy := []byte(`{"IsDisabled":true,"IsHidden":true,"EnableUserPreferenceAccess":true}`)
 	proxyHandler := handler.Proxy(backendURL)
-	authMiddleware := middleware.Auth(embyClient, database, templateUserID)
+	authMiddleware := middleware.Auth(embyClient, database, templateUserID, templatePolicy)
 	trustedProxyMiddleware := middleware.TrustedProxy(trustedCIDRs)
 
 	return trustedProxyMiddleware(authMiddleware(proxyHandler))
@@ -184,6 +185,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 	expectedOrder := []apiCall{
 		{Method: http.MethodGet, Path: "/Users/Query"},
 		{Method: http.MethodPost, Path: "/Users/New"},
+		{Method: http.MethodPost, Path: "/Users/created-user-001/Password"},
 		{Method: http.MethodPost, Path: "/Users/created-user-001/Password"},
 		{Method: http.MethodPost, Path: "/Users/created-user-001/Policy"},
 		{Method: http.MethodPost, Path: "/Users/AuthenticateByName"},
@@ -416,6 +418,7 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 
 	expectedOrder := []apiCall{
 		{Method: http.MethodGet, Path: "/Users/Query"},
+		{Method: http.MethodPost, Path: "/Users/adopted-emby-555/Password"},
 		{Method: http.MethodPost, Path: "/Users/adopted-emby-555/Password"},
 		{Method: http.MethodPost, Path: "/Users/AuthenticateByName"},
 	}
