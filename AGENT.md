@@ -66,7 +66,7 @@ Do NOT run `go build`, `go test`, `go mod tidy`, or any Go commands directly on 
 | `TEMPLATE_USER_NAME` | Yes | — | Name of the template user in Emby |
 | `TRUSTED_PROXIES` | Yes | — | Comma-separated IPs/CIDRs |
 | `BRIDGE_PORT` | No | `8080` | Port the Bridge listens on |
-| `DATABASE_PATH` | No | `./data/users.db` | Path to SQLite database file |
+| `DATABASE_PATH` | No | `/data/users.db` | Path to SQLite database file |
 
 ## Routes
 

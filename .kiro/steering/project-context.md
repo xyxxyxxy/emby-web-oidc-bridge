@@ -4,73 +4,76 @@ inclusion: auto
 
 # Project Context
 
-## Project Name
-emby-web-oidc-bridge
+## What This Is
 
-## Purpose
-A self-hosted solution that bridges Emby web authentication with OpenID Connect (OIDC) providers, enabling centralized identity management for Emby instances.
+emby-web-oidc-bridge is a Go service that enables OIDC SSO for Emby's web interface via oauth2-proxy. It auto-provisions users, authenticates them transparently, and proxies requests to Emby.
 
-## Key Characteristics
-- **Self-hosted**: Designed to run locally without external dependencies
-- **Docker-first**: Deployed via Docker Compose for consistency and reproducibility
-- **Security-focused**: Handles authentication and OIDC flows
-- **Pragmatic approach**: Uses external packages when they reduce complexity and improve maintainability
-- **Local-first**: All components run on user's infrastructure
+## Tech Stack
 
-## Technology Stack
-- Language: [To be determined - Node.js/Python/Go]
-- Authentication: OpenID Connect (OIDC)
-- Integration: Emby Media Server API
+- **Language**: Go 1.23 (stdlib-heavy, minimal dependencies)
+- **Database**: SQLite via `zombiezen.com/go/sqlite` (pure-Go, no CGO)
+- **Testing**: `pgregory.net/rapid` for property-based tests, stdlib `testing` for unit/integration
+- **HTTP**: stdlib `net/http`, `net/http/httputil.ReverseProxy`
+- **Logging**: stdlib `log/slog` (JSON structured)
+- **Container**: distroless static image, nonroot user
 
-## Development Standards
+## Development Constraint
 
-### Version Control
-- **Model**: Git-flow branching strategy
-- **Main branches**: `main` (production), `develop` (integration)
-- **Feature branches**: `feature/*`, `bugfix/*`, `hotfix/*`, `release/*`
+**All Go commands MUST run inside Docker.** No Go toolchain on the host.
 
-### Commit Messages
-- **Format**: Conventional Commits
-- **Types**: feat, fix, docs, style, refactor, perf, test, chore, ci
-- **Example**: `feat(oidc): add provider discovery` or `fix(auth): resolve token validation`
+```bash
+# Tests
+docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...
 
-### Code Quality
-- Self-documenting code with comments on complex logic
-- Input validation for all user data and OIDC responses
-- Error handling for external API calls
-- No hardcoded secrets (use environment variables)
-- Security-first approach to authentication flows
+# Build
+docker build -t emby-auth-bridge .
 
-## Important Files
-- `AGENT.md` - AI agent guidelines and project principles
-- `DEVELOPMENT.md` - Local setup and development workflow
-- `DOCKER.md` - Docker and Docker Compose deployment guide
-- `README.md` - User-facing documentation
-- `docker-compose.yml` - Production deployment configuration
-- `Dockerfile` - Container image definition
-- `.env.local` - Local development configuration (not committed)
-- `.env.example` - Environment variables template
+# Vet
+docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go vet ./...
 
-## When Working on This Project
+# Add dependency
+docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go get <package>
+```
 
-1. **Always use git-flow**: Create feature branches from `develop`, not `main`
-2. **Use conventional commits**: Format all commit messages properly
-3. **Security first**: Validate all inputs, never log sensitive data
-4. **Test with Docker Compose**: Use docker-compose for local testing
-5. **Document changes**: Update relevant documentation files
-6. **Environment variables**: Never hardcode configuration or secrets
-7. **Multi-stage builds**: Optimize Docker images for production
+## Project Layout
 
-## Common Tasks
+```
+cmd/bridge/main.go           # Entry point
+internal/config/             # Env var loading
+internal/emby/               # Emby REST API client
+internal/db/                 # SQLite operations
+internal/middleware/          # TrustedProxy + Auth middleware
+internal/handler/            # Health, Account, Proxy handlers
+internal/password/           # Password generation
+internal/integration/        # Integration tests
+```
 
-- **Starting a feature**: `git flow feature start feature-name`
-- **Committing**: `git commit -m "feat(scope): description"`
-- **Finishing a feature**: `git flow feature finish feature-name`
-- **Creating a release**: `git flow release start X.Y.Z`
+## Key Design Decisions
 
-## Security Considerations
-- OIDC token validation is critical
-- Emby API key must be protected
-- HTTPS required in production
-- CSRF protection needed
-- Input sanitization mandatory
+- No retry logic on Emby API calls
+- Plaintext password storage (by design — not security-critical)
+- Two-step password update: reset to blank, then set new password
+- Auth token shared via `handler.WithAuthToken(ctx)` / `handler.AuthTokenFromContext(ctx)`
+- Non-blocking goroutines for profile image sync and policy updates
+- Re-provisions user if Emby auth fails (handles deleted users)
+- Accepts both `X-Forwarded-Email` and `X-Auth-Request-Email` headers
+
+## Environment Variables
+
+| Variable | Required | Default |
+|----------|----------|---------|
+| `EMBY_API_URL` | Yes | — |
+| `EMBY_API_KEY` | Yes | — |
+| `TEMPLATE_USER_NAME` | Yes | — |
+| `TRUSTED_PROXIES` | Yes | — |
+| `BRIDGE_PORT` | No | `8080` |
+| `DATABASE_PATH` | No | `/data/users.db` |
+
+## Running Locally
+
+```bash
+docker compose up --build
+docker compose logs -f
+```
+
+To reset the database: `docker compose down -v && docker compose up -d`
