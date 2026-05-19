@@ -57,7 +57,7 @@ func Load() (*Config, error) {
 		bridgePort = p
 	}
 
-	databasePath := "./data/users.db"
+	databasePath := "/data/users.db"
 	if dbPath := os.Getenv("DATABASE_PATH"); dbPath != "" {
 		databasePath = dbPath
 	}

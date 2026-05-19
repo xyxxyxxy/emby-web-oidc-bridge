@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 
@@ -10,6 +11,18 @@ import (
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/handler"
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/password"
 )
+
+// buildUserPolicy takes the template policy JSON and overrides IsDisabled and
+// EnableUserPreferenceAccess, preserving all other fields from the template.
+func buildUserPolicy(templatePolicy []byte) ([]byte, error) {
+	var policy map[string]interface{}
+	if err := json.Unmarshal(templatePolicy, &policy); err != nil {
+		return nil, err
+	}
+	policy["IsDisabled"] = false
+	policy["EnableUserPreferenceAccess"] = false
+	return json.Marshal(policy)
+}
 
 // AuthTokenFromContext retrieves the Emby auth token from the request context.
 // This delegates to handler.AuthTokenFromContext to ensure the same context key is used.
@@ -25,19 +38,29 @@ type OIDCHeaders struct {
 }
 
 // Auth returns middleware that extracts headers, provisions users, and authenticates with Emby.
-func Auth(embyClient *emby.Client, database *db.DB, templateUserID string) func(http.Handler) http.Handler {
+func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templatePolicy []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
 
 			// Extract OIDC headers.
+			// Support both X-Forwarded-* (oauth2-proxy upstream mode) and
+			// X-Auth-Request-* (oauth2-proxy forward_auth/subrequest mode).
+			email := r.Header.Get("X-Forwarded-Email")
+			if email == "" {
+				email = r.Header.Get("X-Auth-Request-Email")
+			}
+			displayName := r.Header.Get("X-Forwarded-User")
+			if displayName == "" {
+				displayName = r.Header.Get("X-Auth-Request-User")
+			}
 			headers := OIDCHeaders{
-				Email:       r.Header.Get("X-Forwarded-Email"),
-				DisplayName: r.Header.Get("X-Forwarded-User"),
+				Email:       email,
+				DisplayName: displayName,
 				PictureURL:  r.Header.Get("X-Forwarded-Picture"),
 			}
 
-			// X-Forwarded-Email is required.
+			// Email is required.
 			if headers.Email == "" {
 				slog.Warn("missing X-Forwarded-Email header",
 					"remote_addr", r.RemoteAddr,
@@ -133,12 +156,17 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string) func(
 						return
 					}
 
-					// Update policy: enable user, disable preference access.
-					policy := &emby.UserPolicy{
-						IsDisabled:                 false,
-						EnableUserPreferenceAccess: false,
+					// Update policy: enable user, disable preference access, preserve template settings.
+					policyJSON, polBuildErr := buildUserPolicy(templatePolicy)
+					if polBuildErr != nil {
+						slog.Error("failed to build user policy",
+							"email", headers.Email,
+							"error", polBuildErr,
+						)
+						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+						return
 					}
-					if err := embyClient.UpdatePolicy(ctx, embyUserID, policy); err != nil {
+					if err := embyClient.UpdatePolicyRaw(ctx, embyUserID, policyJSON); err != nil {
 						slog.Error("failed to update policy for new user",
 							"email", headers.Email,
 							"emby_user_id", embyUserID,
@@ -169,12 +197,130 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string) func(
 			// Authenticate with Emby.
 			authResult, err := embyClient.AuthenticateByName(ctx, headers.Email, userPassword)
 			if err != nil {
-				slog.Error("authentication with Emby failed",
-					"email", headers.Email,
-					"error", err,
-				)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
+				// If user was in DB but auth failed, they may have been deleted from Emby.
+				// Check if user still exists and re-provision if needed.
+				if record != nil {
+					slog.Warn("authentication failed for existing DB user, checking if user was deleted from Emby",
+						"email", headers.Email,
+						"emby_user_id", embyUserID,
+						"error", err,
+					)
+
+					existingUser, lookupErr := embyClient.FindUserByName(ctx, headers.Email)
+					if lookupErr != nil {
+						slog.Error("emby user lookup failed during re-provision check",
+							"email", headers.Email,
+							"error", lookupErr,
+						)
+						http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+						return
+					}
+
+					// Delete stale DB record.
+					if delErr := database.DeleteUser(headers.Email); delErr != nil {
+						slog.Error("failed to delete stale user record",
+							"email", headers.Email,
+							"error", delErr,
+						)
+						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+						return
+					}
+
+					// Generate a new password and re-provision.
+					userPassword = password.Generate()
+
+					if existingUser != nil {
+						// User still exists in Emby (password mismatch) — update password.
+						embyUserID = existingUser.ID
+						slog.Warn("re-adopting Emby user after auth failure",
+							"email", headers.Email,
+							"emby_user_id", embyUserID,
+						)
+						if pwErr := embyClient.UpdatePassword(ctx, embyUserID, userPassword); pwErr != nil {
+							slog.Error("failed to update password during re-provision",
+								"email", headers.Email,
+								"error", pwErr,
+							)
+							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+							return
+						}
+					} else {
+						// User was deleted from Emby — create fresh.
+						slog.Warn("user deleted from Emby, re-provisioning",
+							"email", headers.Email,
+						)
+						newUser, createErr := embyClient.CreateUser(ctx, headers.Email, templateUserID)
+						if createErr != nil {
+							slog.Error("failed to re-create user in Emby",
+								"email", headers.Email,
+								"error", createErr,
+							)
+							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+							return
+						}
+						embyUserID = newUser.ID
+
+						if pwErr := embyClient.UpdatePassword(ctx, embyUserID, userPassword); pwErr != nil {
+							slog.Error("failed to set password for re-created user",
+								"email", headers.Email,
+								"error", pwErr,
+							)
+							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+							return
+						}
+
+						policyJSON, polBuildErr := buildUserPolicy(templatePolicy)
+						if polBuildErr != nil {
+							slog.Error("failed to build user policy for re-created user",
+								"email", headers.Email,
+								"error", polBuildErr,
+							)
+							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+							return
+						}
+						if polErr := embyClient.UpdatePolicyRaw(ctx, embyUserID, policyJSON); polErr != nil {
+							slog.Error("failed to update policy for re-created user",
+								"email", headers.Email,
+								"error", polErr,
+							)
+							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+							return
+						}
+					}
+
+					// Store new record in DB.
+					if insErr := database.InsertUser(headers.Email, embyUserID, userPassword); insErr != nil {
+						slog.Error("failed to store re-provisioned user in database",
+							"email", headers.Email,
+							"error", insErr,
+						)
+						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+						return
+					}
+
+					// Retry authentication.
+					authResult, err = embyClient.AuthenticateByName(ctx, headers.Email, userPassword)
+					if err != nil {
+						slog.Error("authentication still failed after re-provision",
+							"email", headers.Email,
+							"error", err,
+						)
+						http.Error(w, "Unauthorized", http.StatusUnauthorized)
+						return
+					}
+
+					slog.Info("user re-provisioned and authenticated successfully",
+						"email", headers.Email,
+						"emby_user_id", embyUserID,
+					)
+				} else {
+					slog.Error("authentication with Emby failed",
+						"email", headers.Email,
+						"error", err,
+					)
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					return
+				}
 			}
 
 			slog.Info("authenticated with Emby",
@@ -195,14 +341,18 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string) func(
 				}()
 			}
 
-			// Non-blocking: disable EnableUserPreferenceAccess.
+			// Non-blocking: apply template policy with overrides.
 			go func() {
-				policy := &emby.UserPolicy{
-					IsDisabled:                 false,
-					EnableUserPreferenceAccess: false,
+				policyJSON, polBuildErr := buildUserPolicy(templatePolicy)
+				if polBuildErr != nil {
+					slog.Warn("failed to build user policy",
+						"email", headers.Email,
+						"error", polBuildErr,
+					)
+					return
 				}
-				if err := embyClient.UpdatePolicy(context.Background(), embyUserID, policy); err != nil {
-					slog.Warn("failed to disable user preference access",
+				if err := embyClient.UpdatePolicyRaw(context.Background(), embyUserID, policyJSON); err != nil {
+					slog.Warn("failed to update user policy",
 						"email", headers.Email,
 						"emby_user_id", embyUserID,
 						"error", err,
@@ -210,8 +360,8 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string) func(
 				}
 			}()
 
-			// Store auth token in context for downstream handlers.
-			ctx = handler.WithAuthToken(ctx, authResult.AccessToken)
+			// Store auth session in context for downstream handlers.
+			ctx = handler.WithAuthSession(ctx, authResult.AccessToken, authResult.User.ID, authResult.ServerID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

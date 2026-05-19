@@ -32,6 +32,7 @@ type userJSON struct {
 
 type userPolicyJSON struct {
 	IsDisabled                 bool `json:"IsDisabled"`
+	IsHidden                   bool `json:"IsHidden"`
 	EnableUserPreferenceAccess bool `json:"EnableUserPreferenceAccess"`
 }
 
@@ -50,6 +51,7 @@ func (u userJSON) toUser() User {
 	if u.Policy != nil {
 		user.Policy = &UserPolicy{
 			IsDisabled:                 u.Policy.IsDisabled,
+			IsHidden:                   u.Policy.IsHidden,
 			EnableUserPreferenceAccess: u.Policy.EnableUserPreferenceAccess,
 		}
 	}

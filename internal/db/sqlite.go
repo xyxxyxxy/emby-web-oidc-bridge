@@ -114,6 +114,26 @@ func (d *DB) InsertUser(email, embyUserID, password string) error {
 	return nil
 }
 
+// DeleteUser removes a user record from the database by email.
+func (d *DB) DeleteUser(email string) error {
+	conn, err := d.pool.Take(context.Background())
+	if err != nil {
+		return fmt.Errorf("delete user: take connection: %w", err)
+	}
+	defer d.pool.Put(conn)
+
+	err = sqlitex.Execute(conn, "DELETE FROM users WHERE email = :email", &sqlitex.ExecOptions{
+		Named: map[string]any{
+			":email": email,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+
+	return nil
+}
+
 // IsHealthy verifies database connectivity by executing a simple query.
 func (d *DB) IsHealthy() bool {
 	conn, err := d.pool.Take(context.Background())

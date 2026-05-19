@@ -20,6 +20,7 @@ type User struct {
 // UserPolicy represents Emby user policy fields.
 type UserPolicy struct {
 	IsDisabled                 bool
+	IsHidden                   bool
 	EnableUserPreferenceAccess bool
 }
 
@@ -90,7 +91,7 @@ func (c *Client) CreateUser(ctx context.Context, name, copyFromUserID string) (*
 	body := createUserRequest{
 		Name:            name,
 		CopyFromUserID:  copyFromUserID,
-		UserCopyOptions: []string{"UserPolicy", "UserConfiguration"},
+		UserCopyOptions: []string{"UserPolicy"},
 	}
 
 	reqBody, err := json.Marshal(body)
@@ -167,34 +168,116 @@ func (c *Client) AuthenticateByName(ctx context.Context, username, password stri
 }
 
 // UpdatePassword sets a new password for the given user.
+// This is a two-step process: first reset the password to blank, then set the new one.
 func (c *Client) UpdatePassword(ctx context.Context, userID, newPassword string) error {
 	url := fmt.Sprintf("%s/Users/%s/Password?api_key=%s", c.baseURL, userID, c.apiKey)
 
-	body := updatePasswordRequest{
+	// Step 1: Reset password to blank.
+	resetBody := updatePasswordRequest{
 		ID:            userID,
-		NewPw:         newPassword,
 		ResetPassword: true,
 	}
 
-	reqBody, err := json.Marshal(body)
+	reqBody, err := json.Marshal(resetBody)
 	if err != nil {
-		return fmt.Errorf("emby: marshal update password request: %w", err)
+		return fmt.Errorf("emby: marshal reset password request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
-		return fmt.Errorf("emby: create update password request: %w", err)
+		return fmt.Errorf("emby: create reset password request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("emby: update password request: %w", err)
+		return fmt.Errorf("emby: reset password request: %w", err)
+	}
+	resp.Body.Close()
+
+	if err := checkResponse(resp); err != nil {
+		return fmt.Errorf("emby: reset password: %w", err)
+	}
+
+	// Step 2: Set the new password.
+	setBody := updatePasswordRequest{
+		ID:   userID,
+		NewPw: newPassword,
+	}
+
+	reqBody, err = json.Marshal(setBody)
+	if err != nil {
+		return fmt.Errorf("emby: marshal set password request: %w", err)
+	}
+
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("emby: create set password request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("emby: set password request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if err := checkResponse(resp); err != nil {
-		return fmt.Errorf("emby: update password: %w", err)
+		return fmt.Errorf("emby: set password: %w", err)
+	}
+
+	return nil
+}
+
+// GetUserPolicy fetches the full policy JSON for a user.
+// Returns the raw JSON bytes so all fields are preserved.
+func (c *Client) GetUserPolicy(ctx context.Context, userID string) ([]byte, error) {
+	url := fmt.Sprintf("%s/Users/%s?api_key=%s", c.baseURL, userID, c.apiKey)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("emby: create get user request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("emby: get user request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := checkResponse(resp); err != nil {
+		return nil, fmt.Errorf("emby: get user: %w", err)
+	}
+
+	var user struct {
+		Policy json.RawMessage `json:"Policy"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return nil, fmt.Errorf("emby: decode user response: %w", err)
+	}
+
+	return user.Policy, nil
+}
+
+// UpdatePolicyRaw updates the policy for the given user using raw JSON bytes.
+// This preserves all policy fields from the source without needing to enumerate them.
+func (c *Client) UpdatePolicyRaw(ctx context.Context, userID string, policyJSON []byte) error {
+	url := fmt.Sprintf("%s/Users/%s/Policy?api_key=%s", c.baseURL, userID, c.apiKey)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(policyJSON))
+	if err != nil {
+		return fmt.Errorf("emby: create update policy request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("emby: update policy request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := checkResponse(resp); err != nil {
+		return fmt.Errorf("emby: update policy: %w", err)
 	}
 
 	return nil
@@ -206,6 +289,7 @@ func (c *Client) UpdatePolicy(ctx context.Context, userID string, policy *UserPo
 
 	body := userPolicyJSON{
 		IsDisabled:                 policy.IsDisabled,
+		IsHidden:                   policy.IsHidden,
 		EnableUserPreferenceAccess: policy.EnableUserPreferenceAccess,
 	}
 
