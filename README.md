@@ -212,6 +212,19 @@ See [AGENT.md](AGENT.md) for full development guidelines.
 - Passwords are stored in plaintext in SQLite (by design — they're not secrets)
 - The bridge only accepts forwarded headers from IPs in the `TRUSTED_PROXIES` list
 
+## Policy Management
+
+The bridge manages user access through the OIDC provider, not through Emby's built-in user management. On every login, the bridge applies the template user's policy with the following overrides:
+
+| Policy Field | Value | Reason |
+|-------------|-------|--------|
+| `IsDisabled` | `false` | Access is managed via the OIDC provider. If a user can authenticate through oauth2-proxy, they should have access. Revoke access at the identity provider, not in Emby. |
+| `EnableUserPreferenceAccess` | `false` | Prevents users from changing their password or profile image in Emby, since these are managed by the bridge and OIDC provider. |
+
+All other policy fields (library access, parental controls, `IsHidden`, remote access, etc.) are inherited from the template user and preserved as-is.
+
+**Important:** If you disable a user in Emby's admin UI, the bridge will re-enable them on their next login. To revoke access, remove the user from your OIDC provider or oauth2-proxy's allowed list instead.
+
 ## License
 
 See [LICENSE](LICENSE).

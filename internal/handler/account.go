@@ -15,11 +15,12 @@ const accountPageTemplate = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Emby Account</title>
     <style>
-        body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
-        .credentials { background: #f5f5f5; padding: 1.5rem; border-radius: 8px; margin: 1rem 0; }
-        .credentials dt { font-weight: bold; margin-top: 1rem; }
-        .credentials dd { margin: 0.25rem 0 0 0; font-family: monospace; font-size: 1.1rem; }
-        .note { color: #666; font-size: 0.9rem; margin-top: 1.5rem; }
+        body { font-family: sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; background: #1a1a1a; color: #e0e0e0; }
+        h1 { color: #fff; }
+        .credentials { background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin: 1rem 0; border: 1px solid #3a3a3a; }
+        .credentials dt { font-weight: bold; margin-top: 1rem; color: #aaa; }
+        .credentials dd { margin: 0.25rem 0 0 0; font-family: monospace; font-size: 1.1rem; color: #fff; }
+        .note { color: #888; font-size: 0.9rem; margin-top: 1.5rem; }
     </style>
 </head>
 <body>
@@ -43,6 +44,9 @@ var accountTmpl = template.Must(template.New("account").Parse(accountPageTemplat
 func Account(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		email := r.Header.Get("X-Forwarded-Email")
+		if email == "" {
+			email = r.Header.Get("X-Auth-Request-Email")
+		}
 		if email == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
