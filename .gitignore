@@ -1,6 +1,13 @@
 # Binary
 bridge
 
+# Go module cache (from Docker builds)
+.gopath/
+
+# Database files
+*.db
+data/
+
 # Environment variable files
 .env
 .env.*
