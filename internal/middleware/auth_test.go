@@ -871,3 +871,174 @@ func TestBuildUserPolicy_InvalidJSON(t *testing.T) {
 		t.Error("BuildUserPolicy should return error for invalid JSON")
 	}
 }
+
+// TestAuth_PreferredUsernameOverName verifies that preferred_username is used over name.
+func TestAuth_PreferredUsernameOverName(t *testing.T) {
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer database.Close()
+
+	var createdName string
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
+			var body struct{ Name string `json:"Name"` }
+			json.NewDecoder(r.Body).Decode(&body)
+			createdName = body.Name
+			resp := map[string]interface{}{"Id": "pref-user-1", "Name": body.Name}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/pref-user-1/Password", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/pref-user-1/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/pref-user-1", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id": "pref-user-1", "Name": "johndoe",
+				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "pref-token",
+				"User":        map[string]interface{}{"Id": "pref-user-1", "Name": "johndoe"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	// Build JWT with both preferred_username and name.
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"sub-pref","preferred_username":"johndoe","name":"John Doe","email":"john@example.com"}`))
+	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesig"))
+	jwtToken := header + "." + payload + "." + signature
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+jwtToken)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	// Emby username should be preferred_username, not name.
+	if createdName != "johndoe" {
+		t.Errorf("expected Emby username %q (preferred_username), got %q", "johndoe", createdName)
+	}
+}
+
+// TestAuth_UniquenessFallback verifies that if the preferred username fails during
+// creation (name conflict), the bridge falls through to the next candidate.
+func TestAuth_UniquenessFallback(t *testing.T) {
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer database.Close()
+
+	var createdNames []string
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		// FindUserByName — no users found (name appears available).
+		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		// CreateUser — first call with "johndoe" fails (race condition: name taken),
+		// second call with "John Doe" also fails, third with email succeeds.
+		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
+			var body struct{ Name string `json:"Name"` }
+			json.NewDecoder(r.Body).Decode(&body)
+			createdNames = append(createdNames, body.Name)
+
+			if body.Name == "johndoe" || body.Name == "John Doe" {
+				// Simulate name conflict.
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			// Email fallback succeeds.
+			resp := map[string]interface{}{"Id": "fallback-user-1", "Name": body.Name}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/fallback-user-1/Password", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/fallback-user-1/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/fallback-user-1", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id": "fallback-user-1", "Name": "john@example.com",
+				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "fallback-token",
+				"User":        map[string]interface{}{"Id": "fallback-user-1", "Name": "john@example.com"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Sub", "sub-conflict")
+	req.Header.Set("X-Forwarded-Preferred-Username", "johndoe")
+	req.Header.Set("X-Forwarded-User", "John Doe")
+	req.Header.Set("X-Forwarded-Email", "john@example.com")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !next.called {
+		t.Error("next handler should have been called")
+	}
+
+	// Should have tried johndoe, then John Doe, then john@example.com.
+	if len(createdNames) != 3 {
+		t.Fatalf("expected 3 creation attempts, got %d: %v", len(createdNames), createdNames)
+	}
+	if createdNames[0] != "johndoe" {
+		t.Errorf("first attempt should be 'johndoe', got %q", createdNames[0])
+	}
+	if createdNames[1] != "John Doe" {
+		t.Errorf("second attempt should be 'John Doe', got %q", createdNames[1])
+	}
+	if createdNames[2] != "john@example.com" {
+		t.Errorf("third attempt should be 'john@example.com', got %q", createdNames[2])
+	}
+}

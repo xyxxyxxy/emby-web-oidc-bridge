@@ -15,14 +15,19 @@ Browser → oauth2-proxy → emby-web-oidc-bridge → Emby Server
 ```
 
 1. **oauth2-proxy** handles the actual OIDC authentication with your identity provider
-2. **The Bridge** reads the forwarded headers (`X-Forwarded-Email`, `X-Forwarded-User`, `X-Forwarded-Picture`), auto-provisions users in Emby, authenticates them, and proxies requests through
+2. **The Bridge** reads the OIDC identity from forwarded headers and the JWT ID token, auto-provisions users in Emby, authenticates them, and proxies requests through
 3. **Emby** sees a normal authenticated session
+
+Users are identified by their OIDC `sub` (subject) claim — a stable, unique identifier that never changes. The Emby account username is derived from OIDC claims in this order: `preferred_username` > `name` > `email`. If a username/email changes in the OIDC provider, the bridge automatically syncs the change to Emby without creating a duplicate account.
 
 Users are automatically provisioned on first login with settings copied from a configurable template user. A simple account page (`/account`) shows generated credentials for use in TV/mobile apps.
 
 ## Features
 
 - Automatic user provisioning from OIDC identity
+- Stable user identity via OIDC `sub` claim (username/email changes don't create duplicates)
+- Username derived from `preferred_username` > `name` > `email` with uniqueness fallback
+- Automatic sync of username/email changes from OIDC provider to Emby
 - Seamless web login (no username/password entry)
 - Template-based user creation (inherit permissions from a configured user)
 - Profile image sync from OIDC claims (both modes, see [Profile Image Sync](#profile-image-sync))
@@ -169,12 +174,24 @@ See [`examples/forward-auth-mode/`](examples/forward-auth-mode/) for a complete 
 
 ### Header Priority
 
-The bridge checks headers in this order:
-1. `X-Forwarded-Email` / `X-Auth-Request-Email` — user's email (required)
-2. `X-Forwarded-User` / `X-Auth-Request-User` — display name (optional)
-3. `X-Forwarded-Picture` / `X-Auth-Request-Picture` — profile image URL (optional)
+The bridge extracts user identity from headers and the JWT ID token. The OIDC `sub` claim is required as the stable user identifier.
 
-The first non-empty value wins for each header.
+**Identity (sub) — required:**
+1. `X-Forwarded-Sub` / `X-Auth-Request-Sub` header
+2. `sub` claim from JWT ID token (via `Authorization: Bearer <token>` or `X-Forwarded-Access-Token`)
+
+**Emby username — resolved in order (first available, unique name wins):**
+1. `preferred_username` from JWT ID token
+2. `X-Forwarded-Preferred-Username` / `X-Auth-Request-Preferred-Username` header
+3. `name` from JWT ID token
+4. `X-Forwarded-User` / `X-Auth-Request-User` header (only if ≠ sub)
+5. `X-Forwarded-Email` / `X-Auth-Request-Email` (final fallback, always unique)
+
+If the preferred username is already taken by another Emby user during account creation, the bridge automatically falls through to the next candidate.
+
+**Other headers:**
+- `X-Forwarded-Email` / `X-Auth-Request-Email` — user's email (stored for fallback)
+- `X-Forwarded-Picture` / `X-Auth-Request-Picture` — profile image URL (optional)
 
 ### Profile Image Sync
 
@@ -205,13 +222,15 @@ Both modes support profile image sync when configured correctly. Your OIDC provi
 
 ### Request Flow
 
-1. Request arrives from oauth2-proxy with `X-Forwarded-Email` header
+1. Request arrives from oauth2-proxy with identity headers / JWT
 2. Bridge checks source IP against `TRUSTED_PROXIES` (403 if untrusted)
-3. Bridge extracts email from header (401 if missing)
-4. Bridge looks up user in local SQLite database
-5. If new user: provisions in Emby (creates account, sets password, applies template policy)
-6. Authenticates with Emby using stored credentials
-7. Proxies the request to Emby with the authenticated session
+3. Bridge extracts `sub` claim from headers or JWT (401 if missing)
+4. Bridge resolves Emby username from `preferred_username` > `name` > `email`
+5. Bridge looks up user in local SQLite database by `sub`
+6. If new user: provisions in Emby (creates account with available username, sets password, applies template policy)
+7. If existing user with changed name/email: syncs the change to Emby
+8. Authenticates with Emby using stored credentials
+9. Proxies the request to Emby with the authenticated session
 
 ### Routes
 
