@@ -342,11 +342,11 @@ func TestSetProfileImage_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if string(receivedBody) != string(imageData) {
-		t.Errorf("received body = %q, want %q", receivedBody, imageData)
+	if string(receivedBody) != "ZmFrZS1pbWFnZS1ieXRlcy1wbmc=" {
+		t.Errorf("received body = %q, want base64-encoded image", receivedBody)
 	}
-	if receivedContentType != "application/octet-stream" {
-		t.Errorf("Content-Type = %q, want %q", receivedContentType, "application/octet-stream")
+	if receivedContentType != "image/png" {
+		t.Errorf("Content-Type = %q, want %q", receivedContentType, "image/png")
 	}
 }
 
