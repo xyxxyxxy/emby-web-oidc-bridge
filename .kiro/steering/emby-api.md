@@ -63,4 +63,4 @@ Note: `IsHidden` is NOT copied from the template user — it must be set explici
 
 ## OpenAPI Spec
 
-The full Emby OpenAPI spec is at `emby-openapi.json` in the project root. Reference it for endpoint details: #[[file:emby-openapi.json]]
+The full Emby OpenAPI spec is at `.kiro/references/emby-openapi.json` in the project. Reference it for endpoint details: #[[file:.kiro/references/emby-openapi.json]]
