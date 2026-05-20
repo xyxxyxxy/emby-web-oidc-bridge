@@ -1,0 +1,29 @@
+# Caddy configuration for forward_auth mode with oauth2-proxy
+# Replace emby.example.com with your actual domain
+
+emby.example.com {
+    # Handle oauth2-proxy callback and sign-in routes
+    handle /oauth2/* {
+        reverse_proxy oauth2-proxy:4180
+    }
+
+    # All other requests: authenticate via oauth2-proxy, then forward to bridge
+    handle {
+        forward_auth oauth2-proxy:4180 {
+            uri /oauth2/auth
+
+            # Copy identity headers from the auth response to the upstream request.
+            # Authorization carries the JWT ID token (contains sub, name, preferred_username, picture).
+            # X-Auth-Request-Email and X-Auth-Request-Preferred-Username are fallbacks.
+            copy_headers X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Preferred-Username Authorization
+
+            # Redirect to sign-in on 401
+            @error status 401
+            handle_response @error {
+                redir * /oauth2/sign_in?rd={scheme}://{host}{uri}
+            }
+        }
+
+        reverse_proxy emby-bridge:8080
+    }
+}
