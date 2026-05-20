@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/config"
@@ -46,8 +48,13 @@ func main() {
 	embyClient := emby.NewClient(cfg.EmbyAPIURL, cfg.EmbyAPIKey)
 
 	// Wait for Emby to become available and validate template user.
+	// Timeout after 60 seconds to avoid hanging indefinitely on misconfiguration.
 	var templateUser *emby.User
+	startupDeadline := time.Now().Add(60 * time.Second)
 	for {
+		if time.Now().After(startupDeadline) {
+			log.Fatalf("timed out waiting for Emby to become available after 60s")
+		}
 		var err error
 		templateUser, err = embyClient.FindUserByName(context.Background(), cfg.TemplateUserName)
 		if err != nil {
@@ -87,7 +94,7 @@ func main() {
 	// /health — no middleware (accessible without trusted proxy check).
 	mux.HandleFunc("GET /health", handler.Health(database, embyClient))
 
-	// /account — trusted proxy check only (account page reads X-Forwarded-Email itself).
+	// /account — trusted proxy check only (account page reads sub from headers/JWT).
 	mux.Handle("GET /account", trustedProxy(http.HandlerFunc(handler.Account(database))))
 
 	// / — redirect to /web/index.html (which handles credential injection).
@@ -101,11 +108,37 @@ func main() {
 	// /* — full middleware chain: trustedProxy → auth → proxy.
 	mux.Handle("/", trustedProxy(auth(proxyHandler)))
 
-	// Start HTTP server.
+	// Create HTTP server with timeouts.
 	addr := fmt.Sprintf(":%d", cfg.BridgePort)
-	slog.Info("starting server", "addr", addr)
-
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Fatalf("server error: %v", err)
+	server := &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
+
+	// Start server in a goroutine.
+	go func() {
+		slog.Info("starting server", "addr", addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
+
+	// Wait for interrupt signal for graceful shutdown.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-quit
+	slog.Info("received shutdown signal", "signal", sig.String())
+
+	// Give in-flight requests 15 seconds to complete.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		slog.Error("server shutdown error", "error", err)
+	}
+
+	slog.Info("server stopped gracefully")
 }

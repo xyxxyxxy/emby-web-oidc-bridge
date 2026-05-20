@@ -80,6 +80,14 @@ func Proxy(embyURL string) http.Handler {
 				req.Header.Set("X-Emby-Token", token)
 			}
 		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			slog.Error("proxy: backend error",
+				"path", r.URL.Path,
+				"method", r.Method,
+				"error", err,
+			)
+			http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		},
 	}
 
 	return proxy

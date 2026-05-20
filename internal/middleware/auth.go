@@ -30,7 +30,11 @@ type cachedSession struct {
 	userID      string
 	serverID    string
 	embyUserID  string
+	expiresAt   time.Time
 }
+
+// sessionCacheTTL is how long a cached session is valid before re-authentication.
+const sessionCacheTTL = 15 * time.Minute
 
 // clearSessionCache removes all entries from the session cache.
 // This is intended for use in tests to ensure isolation between test cases.
@@ -84,6 +88,11 @@ func extractClaimsFromJWT(token string) (sub, preferredUsername, name, email, pi
 		return
 	}
 	return claims.Sub, claims.PreferredUsername, claims.Name, claims.Email, claims.Picture
+}
+
+// oidcClient is an HTTP client with a timeout for OIDC userinfo requests.
+var oidcClient = &http.Client{
+	Timeout: 10 * time.Second,
 }
 
 // AuthTokenFromContext retrieves the Emby auth token from the request context.
@@ -259,7 +268,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					req, err := http.NewRequestWithContext(ctx, http.MethodGet, userinfoURL, nil)
 					if err == nil {
 						req.Header.Set("Authorization", "Bearer "+accessToken)
-						resp, err := http.DefaultClient.Do(req)
+						resp, err := oidcClient.Do(req)
 						if err == nil {
 							defer resp.Body.Close()
 							if resp.StatusCode == http.StatusOK {
@@ -278,12 +287,16 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 			}
 
-			// Check session cache — if we have a cached session, skip everything.
+			// Check session cache — if we have a valid cached session, skip everything.
 			if cached, ok := sessionCache.Load(headers.Sub); ok {
 				session := cached.(*cachedSession)
-				ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
+				if time.Now().Before(session.expiresAt) {
+					ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				// Session expired — delete and continue with fresh auth.
+				sessionCache.Delete(headers.Sub)
 			}
 
 			slog.Info("processing authentication",
@@ -655,6 +668,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				userID:      authResult.User.ID,
 				serverID:    authResult.ServerID,
 				embyUserID:  embyUserID,
+				expiresAt:   time.Now().Add(sessionCacheTTL),
 			})
 
 			// Non-blocking: sync profile image when URL has changed (or on first provisioning).
@@ -670,7 +684,9 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						userSub := headers.Sub
 						go func() {
 							defer pictureSyncInFlight.Delete(userSub)
-							if err := embyClient.SetProfileImage(context.Background(), embyUserID, pictureURL); err != nil {
+							bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
+							defer bgCancel()
+							if err := embyClient.SetProfileImage(bgCtx, embyUserID, pictureURL); err != nil {
 								slog.Warn("failed to set profile image",
 									"sub", userSub,
 									"emby_user_id", embyUserID,
@@ -692,7 +708,9 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			// Non-blocking: enforce IsDisabled=false and EnableUserPreferenceAccess=false
 			// on the user's current policy (preserves admin-configured settings).
 			go func() {
-				currentPolicy, fetchErr := embyClient.GetUserPolicy(context.Background(), embyUserID)
+				bgCtx, bgCancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer bgCancel()
+				currentPolicy, fetchErr := embyClient.GetUserPolicy(bgCtx, embyUserID)
 				if fetchErr != nil {
 					slog.Warn("failed to fetch current user policy",
 						"sub", headers.Sub,
@@ -711,7 +729,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				if marshalErr != nil {
 					return
 				}
-				if err := embyClient.UpdatePolicyRaw(context.Background(), embyUserID, updatedPolicy); err != nil {
+				if err := embyClient.UpdatePolicyRaw(bgCtx, embyUserID, updatedPolicy); err != nil {
 					slog.Warn("failed to enforce user policy",
 						"sub", headers.Sub,
 						"emby_user_id", embyUserID,

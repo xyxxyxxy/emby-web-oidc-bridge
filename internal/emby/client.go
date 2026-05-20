@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // User represents an Emby user record from the API.
@@ -42,9 +43,11 @@ type Client struct {
 // NewClient creates a new Emby API client.
 func NewClient(baseURL, apiKey string) *Client {
 	return &Client{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		apiKey:     apiKey,
-		httpClient: &http.Client{},
+		baseURL: strings.TrimRight(baseURL, "/"),
+		apiKey:  apiKey,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
 	}
 }
 
@@ -336,7 +339,7 @@ func (c *Client) SetProfileImage(ctx context.Context, userID string, imageURL st
 		return fmt.Errorf("emby: fetch image: unexpected status %d", imgResp.StatusCode)
 	}
 
-	imageBytes, err := io.ReadAll(imgResp.Body)
+	imageBytes, err := io.ReadAll(io.LimitReader(imgResp.Body, 5*1024*1024)) // 5MB max
 	if err != nil {
 		return fmt.Errorf("emby: read image bytes: %w", err)
 	}

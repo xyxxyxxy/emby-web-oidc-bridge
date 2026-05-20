@@ -1,12 +1,13 @@
 package handler
 
 import (
-	"fmt"
+	"encoding/json"
 	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const autoLoginTemplate = `<!DOCTYPE html>
@@ -52,13 +53,13 @@ const autoLoginTemplate = `<!DOCTYPE html>
 
 var autoLoginTmpl = template.Must(template.New("autologin").Parse(autoLoginTemplate))
 
-// credentialScript generates an inline script that sets Emby credentials in localStorage
-// and monitors for login page navigation to redirect back to root for re-authentication.
+// credentialScriptTemplate generates an inline script that sets Emby credentials in localStorage.
+// Values are JSON-encoded to prevent XSS via script injection.
 const credentialScriptTemplate = `<script>
 (function() {
-    var serverId = "%s";
-    var userId = "%s";
-    var accessToken = "%s";
+    var serverId = %s;
+    var userId = %s;
+    var accessToken = %s;
     var existing = {};
     try { existing = JSON.parse(localStorage.getItem("servercredentials3")) || {}; } catch(e) {}
     var servers = (existing.Servers || []);
@@ -67,7 +68,6 @@ const credentialScriptTemplate = `<script>
         if (servers[i].Id === serverId) { server = servers[i]; break; }
     }
     if (!server) { server = {"Id": serverId, "Type": "Server"}; servers.push(server); }
-    // Set connection info so Emby knows how to reach the server.
     var origin = window.location.origin;
     server.ManualAddress = origin;
     server.ManualAddressOnly = true;
@@ -79,8 +79,6 @@ const credentialScriptTemplate = `<script>
     existing.Servers = servers;
     localStorage.setItem("servercredentials3", JSON.stringify(existing));
 
-    // If the page loaded with a login hash (e.g. after logout), strip it and reload.
-    // This lets Emby start fresh and find the credentials we just set.
     var hash = window.location.hash || "";
     if (hash.indexOf("manuallogin") !== -1 || hash.indexOf("selectserver") !== -1) {
         if (!sessionStorage.getItem("embybridge_redirect")) {
@@ -92,6 +90,18 @@ const credentialScriptTemplate = `<script>
     sessionStorage.removeItem("embybridge_redirect");
 })();
 </script>`
+
+// jsStringEncode safely encodes a string as a JSON string literal for embedding in JavaScript.
+// This prevents XSS by properly escaping quotes, backslashes, and </script> sequences.
+func jsStringEncode(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// injectCredentialsClient is an HTTP client with a timeout for fetching the Emby page.
+var injectCredentialsClient = &http.Client{
+	Timeout: 10 * time.Second,
+}
 
 // AutoLogin returns an http.HandlerFunc that serves a page which injects
 // the Emby auth credentials into localStorage and redirects to the web UI.
@@ -145,9 +155,9 @@ func InjectCredentials(embyURL string) http.HandlerFunc {
 			return
 		}
 
-		// Fetch the real Emby web/index.html.
+		// Fetch the real Emby web/index.html with a timeout.
 		targetURL := strings.TrimRight(embyURL, "/") + "/web/index.html"
-		resp, err := http.Get(targetURL)
+		resp, err := injectCredentialsClient.Get(targetURL)
 		if err != nil {
 			slog.Error("inject-credentials: failed to fetch Emby page", "error", err)
 			http.Error(w, "Bad Gateway", http.StatusBadGateway)
@@ -162,15 +172,29 @@ func InjectCredentials(embyURL string) http.HandlerFunc {
 			return
 		}
 
-		// Build the credential injection script.
-		script := fmt.Sprintf(credentialScriptTemplate, serverID, userID, token)
+		// Build the credential injection script with JSON-encoded values (XSS-safe).
+		script := strings.NewReplacer(
+			"%s", "", // Clear the template — we'll use Sprintf with safe values.
+		).Replace("")
+		_ = script
+		safeScript := buildCredentialScript(serverID, userID, token)
 
 		// Inject the script right after <head> (before any Emby scripts run).
 		html := string(body)
-		html = strings.Replace(html, "<head>", "<head>"+script, 1)
+		html = strings.Replace(html, "<head>", "<head>"+safeScript, 1)
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write([]byte(html))
 	}
 }
+
+// buildCredentialScript generates the credential injection script with safely encoded values.
+func buildCredentialScript(serverID, userID, token string) string {
+	return strings.Replace(
+		strings.Replace(
+			strings.Replace(credentialScriptTemplate, "%s", jsStringEncode(serverID), 1),
+			"%s", jsStringEncode(userID), 1),
+		"%s", jsStringEncode(token), 1)
+}
+
