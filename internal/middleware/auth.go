@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -23,6 +24,35 @@ func buildUserPolicy(templatePolicy []byte) ([]byte, error) {
 	policy["IsDisabled"] = false
 	policy["EnableUserPreferenceAccess"] = false
 	return json.Marshal(policy)
+}
+
+// extractPictureFromJWT decodes the payload of a JWT token (without signature verification)
+// and extracts the "picture" claim. Returns empty string if not found or on error.
+// Signature verification is not needed because the token was already validated by oauth2-proxy.
+func extractPictureFromJWT(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	// Decode the payload (second part). Add padding if needed.
+	payload := parts[1]
+	switch len(payload) % 4 {
+	case 2:
+		payload += "=="
+	case 3:
+		payload += "="
+	}
+	decoded, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Picture string `json:"picture"`
+	}
+	if json.Unmarshal(decoded, &claims) != nil {
+		return ""
+	}
+	return claims.Picture
 }
 
 // AuthTokenFromContext retrieves the Emby auth token from the request context.
@@ -68,6 +98,9 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			// If no picture URL from headers, try fetching from OIDC userinfo endpoint.
 			if headers.PictureURL == "" && oidcIssuerURL != "" {
 				accessToken := r.Header.Get("X-Forwarded-Access-Token")
+				if accessToken == "" {
+					accessToken = r.Header.Get("X-Auth-Request-Access-Token")
+				}
 				if accessToken != "" {
 					userinfoURL := strings.TrimRight(oidcIssuerURL, "/") + "/userinfo"
 					req, err := http.NewRequestWithContext(ctx, http.MethodGet, userinfoURL, nil)
@@ -88,6 +121,19 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						} else {
 							slog.Warn("failed to fetch userinfo", "error", err)
 						}
+					}
+				}
+			}
+
+			// If still no picture URL, try extracting from JWT in Authorization header.
+			// oauth2-proxy with set_authorization_header=true forwards the ID token.
+			if headers.PictureURL == "" {
+				authHeader := r.Header.Get("Authorization")
+				if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
+					token := authHeader[7:]
+					if picture := extractPictureFromJWT(token); picture != "" {
+						headers.PictureURL = picture
+						slog.Info("extracted picture URL from ID token", "picture_url", headers.PictureURL)
 					}
 				}
 			}
