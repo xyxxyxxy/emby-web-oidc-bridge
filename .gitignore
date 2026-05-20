@@ -1,5 +1,5 @@
 # Binary
-bridge
+/bridge
 
 # Go module cache (from Docker builds)
 .gopath/
