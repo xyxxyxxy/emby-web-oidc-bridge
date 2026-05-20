@@ -41,16 +41,20 @@ Users are automatically provisioned on first login with settings copied from a c
 
 ## Policy Management
 
-The bridge manages user access through the OIDC provider, not through Emby's built-in user management. On every login, the bridge applies the template user's policy with the following overrides:
+The bridge enforces minimal policy overrides to function correctly, while leaving all other settings under admin control.
 
-| Policy Field | Value | Reason |
+**On user creation:** The template user's full policy is applied (library access, parental controls, IsHidden, etc.).
+
+**On every login:** The bridge fetches the user's current policy from Emby and only enforces two fields:
+
+| Policy Field | Enforced Value | Reason |
 |-------------|-------|--------|
 | `IsDisabled` | `false` | Access is managed via the OIDC provider. If a user can authenticate through oauth2-proxy, they should have access. Revoke access at the identity provider, not in Emby. |
-| `EnableUserPreferenceAccess` | `false` | Prevents users from changing their password or profile image in Emby, since these are managed by the bridge and OIDC provider. |
+| `EnableUserPreferenceAccess` | `false` | Prevents users from changing their password or profile image in Emby, since these are managed by the bridge. |
 
-All other policy fields (library access, parental controls, `IsHidden`, remote access, etc.) are inherited from the template user and preserved as-is.
+All other policy fields (library access, parental controls, `IsHidden`, remote access, etc.) are fully controlled by the admin per-user after creation. The bridge will not overwrite them.
 
-**Important:** If you disable a user in Emby's admin UI, the bridge will re-enable them on their next login. To revoke access, remove the user from your OIDC provider.
+**Important:** If you disable a user in Emby's admin UI, the bridge will re-enable them on their next login. To revoke access, remove the user from your OIDC provider or oauth2-proxy's allowed list instead.
 
 ## Quick Start
 
