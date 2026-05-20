@@ -7,12 +7,17 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/db"
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/emby"
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/handler"
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/password"
 )
+
+// pictureSyncInFlight tracks users with an in-flight profile image sync
+// to prevent concurrent goroutines from hitting rate limits.
+var pictureSyncInFlight sync.Map
 
 // buildUserPolicy takes the template policy JSON and overrides IsDisabled and
 // EnableUserPreferenceAccess, preserving all other fields from the template.
@@ -408,28 +413,32 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			)
 
 			// Non-blocking: sync profile image when URL has changed (or on first provisioning).
+			// Uses pictureSyncInFlight to prevent concurrent syncs for the same user.
 			if headers.PictureURL != "" {
 				shouldSync := record == nil || record.PictureURL != headers.PictureURL
 				if shouldSync {
-					pictureURL := headers.PictureURL
-					userEmail := headers.Email
-					go func() {
-						if err := embyClient.SetProfileImage(context.Background(), embyUserID, pictureURL); err != nil {
-							slog.Warn("failed to set profile image",
-								"email", userEmail,
-								"emby_user_id", embyUserID,
-								"error", err,
-							)
-							return
-						}
-						// Update the stored picture URL on success.
-						if err := database.UpdatePictureURL(userEmail, pictureURL); err != nil {
-							slog.Warn("failed to update stored picture URL",
-								"email", userEmail,
-								"error", err,
-							)
-						}
-					}()
+					// Only start a sync if one isn't already in flight for this user.
+					if _, loaded := pictureSyncInFlight.LoadOrStore(headers.Email, true); !loaded {
+						pictureURL := headers.PictureURL
+						userEmail := headers.Email
+						go func() {
+							defer pictureSyncInFlight.Delete(userEmail)
+							if err := embyClient.SetProfileImage(context.Background(), embyUserID, pictureURL); err != nil {
+								slog.Warn("failed to set profile image",
+									"email", userEmail,
+									"emby_user_id", embyUserID,
+									"error", err,
+								)
+								return
+							}
+							if err := database.UpdatePictureURL(userEmail, pictureURL); err != nil {
+								slog.Warn("failed to update stored picture URL",
+									"email", userEmail,
+									"error", err,
+								)
+							}
+						}()
+					}
 				}
 			}
 
