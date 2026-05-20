@@ -20,6 +20,27 @@ import (
 // to prevent concurrent goroutines from hitting rate limits.
 var pictureSyncInFlight sync.Map
 
+// sessionCache stores cached auth sessions per user email to avoid
+// re-authenticating with Emby on every request.
+// Key: email (string), Value: *cachedSession
+var sessionCache sync.Map
+
+type cachedSession struct {
+	accessToken string
+	userID      string
+	serverID    string
+	embyUserID  string
+}
+
+// clearSessionCache removes all entries from the session cache.
+// This is intended for use in tests to ensure isolation between test cases.
+func clearSessionCache() {
+	sessionCache.Range(func(key, value interface{}) bool {
+		sessionCache.Delete(key)
+		return true
+	})
+}
+
 // buildUserPolicy takes the template policy JSON and overrides IsDisabled and
 // EnableUserPreferenceAccess, preserving all other fields from the template.
 func buildUserPolicy(templatePolicy []byte) ([]byte, error) {
@@ -279,6 +300,19 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				)
 			}
 
+			// Check session cache — if we have a cached session for this user,
+			// skip authentication, policy enforcement, and picture sync.
+			if cached, ok := sessionCache.Load(headers.Email); ok {
+				session := cached.(*cachedSession)
+				slog.Debug("using cached session",
+					"email", headers.Email,
+					"emby_user_id", session.embyUserID,
+				)
+				ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
 			// Authenticate with Emby.
 			authResult, err := embyClient.AuthenticateByName(ctx, headers.Email, userPassword)
 			if err != nil {
@@ -290,6 +324,9 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						"emby_user_id", embyUserID,
 						"error", err,
 					)
+
+					// Delete stale cache entry.
+					sessionCache.Delete(headers.Email)
 
 					existingUser, lookupErr := embyClient.FindUserByName(ctx, headers.Email)
 					if lookupErr != nil {
@@ -422,6 +459,14 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				"email", headers.Email,
 				"emby_user_id", authResult.User.ID,
 			)
+
+			// Store session in cache for subsequent requests.
+			sessionCache.Store(headers.Email, &cachedSession{
+				accessToken: authResult.AccessToken,
+				userID:      authResult.User.ID,
+				serverID:    authResult.ServerID,
+				embyUserID:  embyUserID,
+			})
 
 			// Non-blocking: sync profile image when URL has changed (or on first provisioning).
 			// Uses pictureSyncInFlight to prevent concurrent syncs for the same user.
