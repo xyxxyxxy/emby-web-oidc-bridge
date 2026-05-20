@@ -206,14 +206,14 @@ Both modes support profile image sync when configured correctly. Your OIDC provi
 ## Architecture
 
 ```
-┌──────────┐     ┌──────────────┐     ┌───────────────────┐     ┌──────────┐
-│  Browser │────▶│ oauth2-proxy │────▶│ emby-web-oidc-bridge │────▶│   Emby   │
-└──────────┘     └──────────────┘     └───────────────────┘     └──────────┘
-                                              │
-                                              ▼
-                                        ┌──────────┐
-                                        │  SQLite  │
-                                        └──────────┘
+┌─────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────┐
+│ Browser │────▶│ oauth2-proxy │────▶│   Bridge    │────▶│ Emby │
+└─────────┘     └──────────────┘     └─────────────┘     └──────┘
+                                            │
+                                            ▼
+                                       ┌────────┐
+                                       │ SQLite │
+                                       └────────┘
 ```
 
 ### Request Flow
