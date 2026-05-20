@@ -128,7 +128,7 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 1. Create a feature branch from `develop`
 2. Make changes and write/update tests
-3. Run tests in Docker: `docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...`
+3. **Always run tests before committing**: `docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...`
 4. Run vet in Docker: `docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go vet ./...`
 5. Verify Docker build: `docker build -t emby-auth-bridge .`
 6. Commit with conventional commit message

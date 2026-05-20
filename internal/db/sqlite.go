@@ -14,18 +14,21 @@ const schema = `CREATE TABLE IF NOT EXISTS users (
   emby_user_id TEXT NOT NULL,
   password TEXT NOT NULL,
   picture_url TEXT NOT NULL DEFAULT '',
+  picture_synced_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );`
 
 const migration1 = `ALTER TABLE users ADD COLUMN picture_url TEXT NOT NULL DEFAULT '';`
+const migration2 = `ALTER TABLE users ADD COLUMN picture_synced_at TEXT NOT NULL DEFAULT '';`
 
 // UserRecord represents a row in the users table.
 type UserRecord struct {
-	Email      string
-	EmbyUserID string
-	Password   string
-	PictureURL string
-	CreatedAt  time.Time
+	Email           string
+	EmbyUserID      string
+	Password        string
+	PictureURL      string
+	PictureSyncedAt time.Time
+	CreatedAt       time.Time
 }
 
 // DB wraps SQLite database operations.
@@ -60,6 +63,7 @@ func Open(path string) (*DB, error) {
 
 	// Run migrations for existing databases.
 	_ = sqlitex.ExecuteScript(conn, migration1, nil) // Ignore error if column already exists.
+	_ = sqlitex.ExecuteScript(conn, migration2, nil) // Ignore error if column already exists.
 
 	return &DB{pool: pool}, nil
 }
@@ -73,22 +77,28 @@ func (d *DB) FindUser(email string) (*UserRecord, error) {
 	defer d.pool.Put(conn)
 
 	var record *UserRecord
-	err = sqlitex.Execute(conn, "SELECT email, emby_user_id, password, picture_url, created_at FROM users WHERE email = :email", &sqlitex.ExecOptions{
+	err = sqlitex.Execute(conn, "SELECT email, emby_user_id, password, picture_url, picture_synced_at, created_at FROM users WHERE email = :email", &sqlitex.ExecOptions{
 		Named: map[string]any{
 			":email": email,
 		},
 		ResultFunc: func(stmt *sqlite.Stmt) error {
+			pictureSyncedAtStr := stmt.GetText("picture_synced_at")
+			pictureSyncedAt, parseErr := time.Parse("2006-01-02 15:04:05", pictureSyncedAtStr)
+			if parseErr != nil {
+				pictureSyncedAt = time.Time{}
+			}
 			createdAtStr := stmt.GetText("created_at")
 			createdAt, parseErr := time.Parse("2006-01-02 15:04:05", createdAtStr)
 			if parseErr != nil {
 				createdAt = time.Time{}
 			}
 			record = &UserRecord{
-				Email:      stmt.GetText("email"),
-				EmbyUserID: stmt.GetText("emby_user_id"),
-				Password:   stmt.GetText("password"),
-				PictureURL: stmt.GetText("picture_url"),
-				CreatedAt:  createdAt,
+				Email:           stmt.GetText("email"),
+				EmbyUserID:      stmt.GetText("emby_user_id"),
+				Password:        stmt.GetText("password"),
+				PictureURL:      stmt.GetText("picture_url"),
+				PictureSyncedAt: pictureSyncedAt,
+				CreatedAt:       createdAt,
 			}
 			return nil
 		},
@@ -150,7 +160,7 @@ func (d *DB) UpdatePictureURL(email, pictureURL string) error {
 	}
 	defer d.pool.Put(conn)
 
-	err = sqlitex.Execute(conn, "UPDATE users SET picture_url = :picture_url WHERE email = :email", &sqlitex.ExecOptions{
+	err = sqlitex.Execute(conn, "UPDATE users SET picture_url = :picture_url, picture_synced_at = datetime('now') WHERE email = :email", &sqlitex.ExecOptions{
 		Named: map[string]any{
 			":email":       email,
 			":picture_url": pictureURL,

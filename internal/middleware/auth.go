@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/db"
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/emby"
@@ -415,7 +416,9 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			// Non-blocking: sync profile image when URL has changed (or on first provisioning).
 			// Uses pictureSyncInFlight to prevent concurrent syncs for the same user.
 			if headers.PictureURL != "" {
-				shouldSync := record == nil || record.PictureURL != headers.PictureURL
+				shouldSync := record == nil || record.PictureURL != headers.PictureURL ||
+					(!record.PictureSyncedAt.IsZero() && time.Since(record.PictureSyncedAt) > 24*time.Hour) ||
+					(record.PictureSyncedAt.IsZero() && record.PictureURL != "")
 				if shouldSync {
 					// Only start a sync if one isn't already in flight for this user.
 					if _, loaded := pictureSyncInFlight.LoadOrStore(headers.Email, true); !loaded {
