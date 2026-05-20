@@ -73,7 +73,7 @@ func TestAuth_MissingEmail(t *testing.T) {
 
 	client := emby.NewClient(srv.URL, "test-key")
 	next := &nextHandler{}
-	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy)(next)
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	// No X-Forwarded-Email header set.
@@ -136,7 +136,7 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 
 	client := emby.NewClient(srv.URL, "test-key")
 	next := &nextHandler{}
-	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy)(next)
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
@@ -228,7 +228,7 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 
 	client := emby.NewClient(srv.URL, "test-key")
 	next := &nextHandler{}
-	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy)(next)
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Email", "newuser@example.com")
@@ -317,7 +317,7 @@ func TestAuth_AdoptedUser(t *testing.T) {
 
 	client := emby.NewClient(srv.URL, "test-key")
 	next := &nextHandler{}
-	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy)(next)
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Email", "adopted@example.com")
@@ -366,7 +366,7 @@ func TestAuth_EmbyUnreachable(t *testing.T) {
 
 	client := emby.NewClient(srv.URL, "test-key")
 	next := &nextHandler{}
-	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy)(next)
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Email", "unreachable@example.com")
@@ -409,7 +409,7 @@ func TestAuth_UserCreationFailure(t *testing.T) {
 
 	client := emby.NewClient(srv.URL, "test-key")
 	next := &nextHandler{}
-	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy)(next)
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Email", "failcreate@example.com")
@@ -464,7 +464,7 @@ func TestAuth_AuthTokenInContext(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy)(nextFn)
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(nextFn)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Email", "context@example.com")
@@ -513,7 +513,7 @@ func TestAuth_MissingOptionalHeaders(t *testing.T) {
 
 	client := emby.NewClient(srv.URL, "test-key")
 	next := &nextHandler{}
-	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy)(next)
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Email", "nooptional@example.com")

@@ -41,7 +41,7 @@ func buildErrorChain(trusted []*net.IPNet, embyClient *emby.Client, database *db
 		w.Write([]byte("proxied"))
 	})
 
-	authMiddleware := middleware.Auth(embyClient, database, "template-user-id", testTemplatePolicy)
+	authMiddleware := middleware.Auth(embyClient, database, "template-user-id", testTemplatePolicy, "")
 	proxyMiddleware := middleware.TrustedProxy(trusted)
 
 	return proxyMiddleware(authMiddleware(finalHandler))

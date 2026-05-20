@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/db"
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/emby"
@@ -38,7 +39,7 @@ type OIDCHeaders struct {
 }
 
 // Auth returns middleware that extracts headers, provisions users, and authenticates with Emby.
-func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templatePolicy []byte) func(http.Handler) http.Handler {
+func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templatePolicy []byte, oidcIssuerURL string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
@@ -62,6 +63,33 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 
 			if headers.PictureURL == "" {
 				headers.PictureURL = r.Header.Get("X-Auth-Request-Picture")
+			}
+
+			// If no picture URL from headers, try fetching from OIDC userinfo endpoint.
+			if headers.PictureURL == "" && oidcIssuerURL != "" {
+				accessToken := r.Header.Get("X-Forwarded-Access-Token")
+				if accessToken != "" {
+					userinfoURL := strings.TrimRight(oidcIssuerURL, "/") + "/userinfo"
+					req, err := http.NewRequestWithContext(ctx, http.MethodGet, userinfoURL, nil)
+					if err == nil {
+						req.Header.Set("Authorization", "Bearer "+accessToken)
+						resp, err := http.DefaultClient.Do(req)
+						if err == nil {
+							defer resp.Body.Close()
+							if resp.StatusCode == http.StatusOK {
+								var claims struct {
+									Picture string `json:"picture"`
+								}
+								if json.NewDecoder(resp.Body).Decode(&claims) == nil && claims.Picture != "" {
+									headers.PictureURL = claims.Picture
+									slog.Info("fetched picture URL from userinfo", "picture_url", headers.PictureURL)
+								}
+							}
+						} else {
+							slog.Warn("failed to fetch userinfo", "error", err)
+						}
+					}
+				}
 			}
 
 			// Email is required.

@@ -76,7 +76,7 @@ func main() {
 
 	// Create middleware functions.
 	trustedProxy := middleware.TrustedProxy(cfg.TrustedProxies)
-	auth := middleware.Auth(embyClient, database, templateUser.ID, templatePolicy)
+	auth := middleware.Auth(embyClient, database, templateUser.ID, templatePolicy, cfg.OIDCIssuerURL)
 
 	// Create proxy handler.
 	proxyHandler := handler.Proxy(cfg.EmbyAPIURL)

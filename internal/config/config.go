@@ -17,7 +17,8 @@ type Config struct {
 	TemplateUserName string       // TEMPLATE_USER_NAME
 	TrustedProxies   []*net.IPNet // TRUSTED_PROXIES (parsed CIDR/IPs)
 	BridgePort       int          // BRIDGE_PORT (default: 8080)
-	DatabasePath     string       // DATABASE_PATH (default: ./data/users.db)
+	DatabasePath     string       // DATABASE_PATH (default: /data/users.db)
+	OIDCIssuerURL    string       // OIDC_ISSUER_URL (optional, for profile image sync)
 }
 
 // Load reads configuration from environment variables.
@@ -62,6 +63,8 @@ func Load() (*Config, error) {
 		databasePath = dbPath
 	}
 
+	oidcIssuerURL := os.Getenv("OIDC_ISSUER_URL")
+
 	return &Config{
 		EmbyAPIURL:       embyAPIURL,
 		EmbyAPIKey:       embyAPIKey,
@@ -69,6 +72,7 @@ func Load() (*Config, error) {
 		TrustedProxies:   trustedProxies,
 		BridgePort:       bridgePort,
 		DatabasePath:     databasePath,
+		OIDCIssuerURL:    oidcIssuerURL,
 	}, nil
 }
 
