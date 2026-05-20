@@ -67,6 +67,11 @@ const credentialScriptTemplate = `<script>
         if (servers[i].Id === serverId) { server = servers[i]; break; }
     }
     if (!server) { server = {"Id": serverId, "Type": "Server"}; servers.push(server); }
+    // Set connection info so Emby knows how to reach the server.
+    var origin = window.location.origin;
+    server.ManualAddress = origin;
+    server.ManualAddressOnly = true;
+    server.Name = "Emby";
     server.UserId = userId;
     server.DateLastAccessed = Date.now();
     server.LastConnectionMode = 2;

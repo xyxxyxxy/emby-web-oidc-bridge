@@ -90,8 +90,10 @@ func main() {
 	// /account — trusted proxy check only (account page reads X-Forwarded-Email itself).
 	mux.Handle("GET /account", trustedProxy(http.HandlerFunc(handler.Account(database))))
 
-	// / — auto-login page (injects credentials into localStorage, redirects to web UI).
-	mux.Handle("GET /{$}", trustedProxy(auth(http.HandlerFunc(handler.AutoLogin()))))
+	// / — redirect to /web/index.html (which handles credential injection).
+	mux.Handle("GET /{$}", trustedProxy(auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/web/index.html", http.StatusFound)
+	}))))
 
 	// /web/index.html — fetch real Emby page, inject credentials inline.
 	mux.Handle("GET /web/index.html", trustedProxy(auth(http.HandlerFunc(handler.InjectCredentials(cfg.EmbyAPIURL)))))
