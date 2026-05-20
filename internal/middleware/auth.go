@@ -122,6 +122,23 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				headers.PictureURL = r.Header.Get("X-Auth-Request-Picture")
 			}
 
+			// Email is required.
+			if headers.Email == "" {
+				slog.Warn("missing X-Forwarded-Email header",
+					"remote_addr", r.RemoteAddr,
+				)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			// Check session cache — if we have a cached session, skip everything.
+			if cached, ok := sessionCache.Load(headers.Email); ok {
+				session := cached.(*cachedSession)
+				ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+
 			// If no picture URL from headers, try fetching from OIDC userinfo endpoint.
 			if headers.PictureURL == "" && oidcIssuerURL != "" {
 				accessToken := r.Header.Get("X-Forwarded-Access-Token")
@@ -298,19 +315,6 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					"email", headers.Email,
 					"emby_user_id", embyUserID,
 				)
-			}
-
-			// Check session cache — if we have a cached session for this user,
-			// skip authentication, policy enforcement, and picture sync.
-			if cached, ok := sessionCache.Load(headers.Email); ok {
-				session := cached.(*cachedSession)
-				slog.Debug("using cached session",
-					"email", headers.Email,
-					"emby_user_id", session.embyUserID,
-				)
-				ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
 			}
 
 			// Authenticate with Emby.
