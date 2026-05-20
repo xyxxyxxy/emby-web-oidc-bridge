@@ -52,7 +52,8 @@ const autoLoginTemplate = `<!DOCTYPE html>
 
 var autoLoginTmpl = template.Must(template.New("autologin").Parse(autoLoginTemplate))
 
-// credentialScript generates an inline script that sets Emby credentials in localStorage.
+// credentialScript generates an inline script that sets Emby credentials in localStorage
+// and monitors for login page navigation to redirect back to root for re-authentication.
 const credentialScriptTemplate = `<script>
 (function() {
     var serverId = "%s";
@@ -72,6 +73,18 @@ const credentialScriptTemplate = `<script>
     server.Users = [{"UserId": userId, "AccessToken": accessToken}];
     existing.Servers = servers;
     localStorage.setItem("servercredentials3", JSON.stringify(existing));
+
+    // If the page loaded with a login hash (e.g. after logout), strip it and reload.
+    // This lets Emby start fresh and find the credentials we just set.
+    var hash = window.location.hash || "";
+    if (hash.indexOf("manuallogin") !== -1 || hash.indexOf("selectserver") !== -1) {
+        if (!sessionStorage.getItem("embybridge_redirect")) {
+            sessionStorage.setItem("embybridge_redirect", "1");
+            window.location.href = "/web/index.html";
+            return;
+        }
+    }
+    sessionStorage.removeItem("embybridge_redirect");
 })();
 </script>`
 

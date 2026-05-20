@@ -60,6 +60,10 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				PictureURL:  r.Header.Get("X-Forwarded-Picture"),
 			}
 
+			if headers.PictureURL == "" {
+				headers.PictureURL = r.Header.Get("X-Auth-Request-Picture")
+			}
+
 			// Email is required.
 			if headers.Email == "" {
 				slog.Warn("missing X-Forwarded-Email header",
@@ -71,6 +75,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 
 			slog.Info("processing authentication",
 				"email", headers.Email,
+				"picture_url", headers.PictureURL,
 			)
 
 			// Lookup user in database.
