@@ -1,5 +1,6 @@
 ---
 inclusion: auto
+description: Docker commands for building, testing, and running the Go service without a local toolchain.
 ---
 
 # Docker Development

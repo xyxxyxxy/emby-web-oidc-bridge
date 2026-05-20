@@ -1,4 +1,5 @@
 ---
+description: Project overview, tech stack, layout, design decisions, and development constraints for the emby-web-oidc-bridge service.
 inclusion: auto
 ---
 
