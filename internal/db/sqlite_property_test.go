@@ -28,24 +28,32 @@ func TestDatabaseRoundTrip(t *testing.T) {
 		}
 		defer database.Close()
 
+		sub := rapid.StringMatching(`[a-z0-9]{8,20}`).Draw(t, "sub")
+		name := rapid.StringMatching(`[A-Za-z ]{3,20}`).Draw(t, "name")
 		email := rapid.StringMatching(`[a-z]{3,10}@[a-z]{3,8}\.[a-z]{2,4}`).Draw(t, "email")
 		userID := rapid.StringMatching(`[a-f0-9]{32}`).Draw(t, "userID")
 		password := rapid.StringMatching(`[a-z0-9]{8}`).Draw(t, "password")
 
-		err = database.InsertUser(email, userID, password)
+		err = database.InsertUser(sub, name, email, userID, password)
 		if err != nil {
 			t.Fatalf("InsertUser failed: %v", err)
 		}
 
-		record, err := database.FindUser(email)
+		record, err := database.FindUserBySub(sub)
 		if err != nil {
-			t.Fatalf("FindUser failed: %v", err)
+			t.Fatalf("FindUserBySub failed: %v", err)
 		}
 
 		if record == nil {
-			t.Fatalf("FindUser returned nil for email %q after insert", email)
+			t.Fatalf("FindUserBySub returned nil for sub %q after insert", sub)
 		}
 
+		if record.OIDCSub != sub {
+			t.Fatalf("OIDCSub mismatch: got %q, want %q", record.OIDCSub, sub)
+		}
+		if record.Name != name {
+			t.Fatalf("Name mismatch: got %q, want %q", record.Name, name)
+		}
 		if record.Email != email {
 			t.Fatalf("Email mismatch: got %q, want %q", record.Email, email)
 		}
@@ -68,11 +76,13 @@ func TestPasswordStability(t *testing.T) {
 	defer database.Close()
 
 	rapid.Check(t, func(t *rapid.T) {
+		sub := rapid.StringMatching(`[a-z0-9]{8,20}`).Draw(t, "sub")
+		name := rapid.StringMatching(`[A-Za-z ]{3,20}`).Draw(t, "name")
 		email := rapid.StringMatching(`[a-z]{3,10}@[a-z]{3,8}\.[a-z]{2,4}`).Draw(t, "email")
 		userID := rapid.StringMatching(`[a-f0-9]{32}`).Draw(t, "userID")
 		password := rapid.StringMatching(`[a-z0-9]{8}`).Draw(t, "password")
 
-		err := database.InsertUser(email, userID, password)
+		err := database.InsertUser(sub, name, email, userID, password)
 		if err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
@@ -80,12 +90,12 @@ func TestPasswordStability(t *testing.T) {
 		// Query the user multiple times and verify the password never changes
 		lookups := rapid.IntRange(2, 10).Draw(t, "lookups")
 		for i := 0; i < lookups; i++ {
-			record, err := database.FindUser(email)
+			record, err := database.FindUserBySub(sub)
 			if err != nil {
-				t.Fatalf("FindUser (lookup %d) failed: %v", i+1, err)
+				t.Fatalf("FindUserBySub (lookup %d) failed: %v", i+1, err)
 			}
 			if record == nil {
-				t.Fatalf("FindUser (lookup %d) returned nil for existing user %q", i+1, email)
+				t.Fatalf("FindUserBySub (lookup %d) returned nil for existing user %q", i+1, sub)
 			}
 			if record.Password != password {
 				t.Fatalf("password changed on lookup %d: got %q, want %q", i+1, record.Password, password)

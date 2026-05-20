@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/db"
 )
@@ -28,7 +31,7 @@ const accountPageTemplate = `<!DOCTYPE html>
     <div class="credentials">
         <dl>
             <dt>Username</dt>
-            <dd>{{.Email}}</dd>
+            <dd>{{.Username}}</dd>
             <dt>Password</dt>
             <dd>{{.Password}}</dd>
         </dl>
@@ -39,22 +42,70 @@ const accountPageTemplate = `<!DOCTYPE html>
 
 var accountTmpl = template.Must(template.New("account").Parse(accountPageTemplate))
 
+// extractSubFromRequest extracts the OIDC sub claim from request headers or JWT.
+func extractSubFromRequest(r *http.Request) string {
+	// Try explicit sub headers first.
+	sub := r.Header.Get("X-Forwarded-Sub")
+	if sub == "" {
+		sub = r.Header.Get("X-Auth-Request-Sub")
+	}
+	if sub != "" {
+		return sub
+	}
+
+	// Try extracting from JWT.
+	token := ""
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
+		token = authHeader[7:]
+	}
+	if token == "" {
+		token = r.Header.Get("X-Forwarded-Access-Token")
+		if token == "" {
+			token = r.Header.Get("X-Auth-Request-Access-Token")
+		}
+	}
+	if token == "" {
+		return ""
+	}
+
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload := parts[1]
+	switch len(payload) % 4 {
+	case 2:
+		payload += "=="
+	case 3:
+		payload += "="
+	}
+	decoded, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Sub string `json:"sub"`
+	}
+	if json.Unmarshal(decoded, &claims) != nil {
+		return ""
+	}
+	return claims.Sub
+}
+
 // Account returns an http.HandlerFunc for the /account endpoint.
-// Renders an HTML page showing the user's email and password.
+// Renders an HTML page showing the user's Emby username and password.
 func Account(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		email := r.Header.Get("X-Forwarded-Email")
-		if email == "" {
-			email = r.Header.Get("X-Auth-Request-Email")
-		}
-		if email == "" {
+		sub := extractSubFromRequest(r)
+		if sub == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		record, err := database.FindUser(email)
+		record, err := database.FindUserBySub(sub)
 		if err != nil {
-			slog.Error("account page: database error", "email", email, "error", err)
+			slog.Error("account page: database error", "sub", sub, "error", err)
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
@@ -63,16 +114,22 @@ func Account(database *db.DB) http.HandlerFunc {
 			return
 		}
 
+		// Emby username is name > email.
+		username := record.Name
+		if username == "" {
+			username = record.Email
+		}
+
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		err = accountTmpl.Execute(w, struct {
-			Email    string
+			Username string
 			Password string
 		}{
-			Email:    record.Email,
+			Username: username,
 			Password: record.Password,
 		})
 		if err != nil {
-			slog.Error("account page: template render error", "email", email, "error", err)
+			slog.Error("account page: template render error", "sub", sub, "error", err)
 		}
 	}
 }

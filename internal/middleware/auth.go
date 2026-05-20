@@ -20,9 +20,9 @@ import (
 // to prevent concurrent goroutines from hitting rate limits.
 var pictureSyncInFlight sync.Map
 
-// sessionCache stores cached auth sessions per user email to avoid
+// sessionCache stores cached auth sessions per OIDC sub to avoid
 // re-authenticating with Emby on every request.
-// Key: email (string), Value: *cachedSession
+// Key: oidc_sub (string), Value: *cachedSession
 var sessionCache sync.Map
 
 type cachedSession struct {
@@ -53,13 +53,13 @@ func buildUserPolicy(templatePolicy []byte) ([]byte, error) {
 	return json.Marshal(policy)
 }
 
-// extractPictureFromJWT decodes the payload of a JWT token (without signature verification)
-// and extracts the "picture" claim. Returns empty string if not found or on error.
+// extractClaimsFromJWT decodes the payload of a JWT token (without signature verification)
+// and extracts the "sub", "name", "email", and "picture" claims.
 // Signature verification is not needed because the token was already validated by oauth2-proxy.
-func extractPictureFromJWT(token string) string {
+func extractClaimsFromJWT(token string) (sub, name, email, picture string) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return ""
+		return
 	}
 	// Decode the payload (second part). Add padding if needed.
 	payload := parts[1]
@@ -71,15 +71,18 @@ func extractPictureFromJWT(token string) string {
 	}
 	decoded, err := base64.URLEncoding.DecodeString(payload)
 	if err != nil {
-		return ""
+		return
 	}
 	var claims struct {
+		Sub     string `json:"sub"`
+		Name    string `json:"name"`
+		Email   string `json:"email"`
 		Picture string `json:"picture"`
 	}
 	if json.Unmarshal(decoded, &claims) != nil {
-		return ""
+		return
 	}
-	return claims.Picture
+	return claims.Sub, claims.Name, claims.Email, claims.Picture
 }
 
 // AuthTokenFromContext retrieves the Emby auth token from the request context.
@@ -90,12 +93,23 @@ func AuthTokenFromContext(ctx context.Context) string {
 
 // OIDCHeaders holds extracted OIDC session headers.
 type OIDCHeaders struct {
+	Sub         string
+	Name        string
 	Email       string
-	DisplayName string
 	PictureURL  string
 }
 
+// embyUsername returns the preferred Emby username: name > email.
+func (h *OIDCHeaders) embyUsername() string {
+	if h.Name != "" {
+		return h.Name
+	}
+	return h.Email
+}
+
 // Auth returns middleware that extracts headers, provisions users, and authenticates with Emby.
+// Users are identified by their OIDC sub (subject) claim. The Emby account username is set to
+// the OIDC name field, falling back to email. Username and email changes are synced automatically.
 func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templatePolicy []byte, oidcIssuerURL string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,34 +126,75 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			if displayName == "" {
 				displayName = r.Header.Get("X-Auth-Request-User")
 			}
+			pictureURL := r.Header.Get("X-Forwarded-Picture")
+			if pictureURL == "" {
+				pictureURL = r.Header.Get("X-Auth-Request-Picture")
+			}
+
+			// Extract sub from X-Forwarded-Sub / X-Auth-Request-Sub headers first.
+			sub := r.Header.Get("X-Forwarded-Sub")
+			if sub == "" {
+				sub = r.Header.Get("X-Auth-Request-Sub")
+			}
+
+			// Try to extract claims from the JWT ID token.
+			var jwtSub, jwtName, jwtEmail, jwtPicture string
+			idToken := ""
+			authHeader := r.Header.Get("Authorization")
+			if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
+				idToken = authHeader[7:]
+			}
+			if idToken == "" {
+				idToken = r.Header.Get("X-Forwarded-Access-Token")
+				if idToken == "" {
+					idToken = r.Header.Get("X-Auth-Request-Access-Token")
+				}
+			}
+			if idToken != "" {
+				jwtSub, jwtName, jwtEmail, jwtPicture = extractClaimsFromJWT(idToken)
+			}
+
+			// Fill in missing values from JWT claims.
+			if sub == "" {
+				sub = jwtSub
+			}
+			if displayName == "" {
+				displayName = jwtName
+			}
+			if email == "" {
+				email = jwtEmail
+			}
+			if pictureURL == "" && jwtPicture != "" {
+				pictureURL = jwtPicture
+			}
+
 			headers := OIDCHeaders{
-				Email:       email,
-				DisplayName: displayName,
-				PictureURL:  r.Header.Get("X-Forwarded-Picture"),
+				Sub:        sub,
+				Name:       displayName,
+				Email:      email,
+				PictureURL: pictureURL,
 			}
 
-			if headers.PictureURL == "" {
-				headers.PictureURL = r.Header.Get("X-Auth-Request-Picture")
-			}
-
-			// Email is required.
-			if headers.Email == "" {
-				slog.Warn("missing X-Forwarded-Email header",
+			// Sub is required — it's the stable user identifier.
+			if headers.Sub == "" {
+				slog.Warn("missing OIDC sub claim",
 					"remote_addr", r.RemoteAddr,
 				)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				http.Error(w, "Unauthorized: missing sub claim", http.StatusUnauthorized)
 				return
 			}
 
-			// Check session cache — if we have a cached session, skip everything.
-			if cached, ok := sessionCache.Load(headers.Email); ok {
-				session := cached.(*cachedSession)
-				ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
-				next.ServeHTTP(w, r.WithContext(ctx))
+			// At least one of name or email is required for the Emby username.
+			if headers.embyUsername() == "" {
+				slog.Warn("missing both name and email from OIDC",
+					"sub", headers.Sub,
+					"remote_addr", r.RemoteAddr,
+				)
+				http.Error(w, "Unauthorized: missing name and email", http.StatusUnauthorized)
 				return
 			}
 
-			// If no picture URL from headers, try fetching from OIDC userinfo endpoint.
+			// If no picture URL from headers/JWT, try fetching from OIDC userinfo endpoint.
 			if headers.PictureURL == "" && oidcIssuerURL != "" {
 				accessToken := r.Header.Get("X-Forwarded-Access-Token")
 				if accessToken == "" {
@@ -169,38 +224,26 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 			}
 
-			// If still no picture URL, try extracting from JWT in Authorization header.
-			// oauth2-proxy with set_authorization_header=true forwards the ID token.
-			if headers.PictureURL == "" {
-				authHeader := r.Header.Get("Authorization")
-				if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
-					token := authHeader[7:]
-					if picture := extractPictureFromJWT(token); picture != "" {
-						headers.PictureURL = picture
-						slog.Info("extracted picture URL from ID token", "picture_url", headers.PictureURL)
-					}
-				}
-			}
-
-			// Email is required.
-			if headers.Email == "" {
-				slog.Warn("missing X-Forwarded-Email header",
-					"remote_addr", r.RemoteAddr,
-				)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			// Check session cache — if we have a cached session, skip everything.
+			if cached, ok := sessionCache.Load(headers.Sub); ok {
+				session := cached.(*cachedSession)
+				ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
 
 			slog.Info("processing authentication",
+				"sub", headers.Sub,
+				"name", headers.Name,
 				"email", headers.Email,
 				"picture_url", headers.PictureURL,
 			)
 
-			// Lookup user in database.
-			record, err := database.FindUser(headers.Email)
+			// Lookup user in database by OIDC sub.
+			record, err := database.FindUserBySub(headers.Sub)
 			if err != nil {
 				slog.Error("database lookup failed",
-					"email", headers.Email,
+					"sub", headers.Sub,
 					"error", err,
 				)
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -209,21 +252,59 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 
 			var userPassword string
 			var embyUserID string
+			embyUsername := headers.embyUsername()
 
 			if record != nil {
 				// User exists in DB — use stored password.
 				userPassword = record.Password
 				embyUserID = record.EmbyUserID
 				slog.Info("user found in database",
-					"email", headers.Email,
+					"sub", headers.Sub,
 					"emby_user_id", embyUserID,
 				)
+
+				// Sync name/email changes from OIDC to the bridge DB and Emby.
+				oldEmbyUsername := record.Name
+				if oldEmbyUsername == "" {
+					oldEmbyUsername = record.Email
+				}
+				nameChanged := headers.Name != record.Name || headers.Email != record.Email
+
+				if nameChanged {
+					// Update the bridge DB with new name/email.
+					if err := database.UpdateUserIdentity(headers.Sub, headers.Name, headers.Email); err != nil {
+						slog.Error("failed to update user identity in database",
+							"sub", headers.Sub,
+							"error", err,
+						)
+						// Non-fatal: continue with auth.
+					}
+
+					// If the Emby username changed, rename the user in Emby.
+					if embyUsername != oldEmbyUsername {
+						slog.Info("syncing username change to Emby",
+							"sub", headers.Sub,
+							"old_name", oldEmbyUsername,
+							"new_name", embyUsername,
+						)
+						if err := embyClient.UpdateUserName(ctx, embyUserID, embyUsername); err != nil {
+							slog.Error("failed to rename user in Emby",
+								"sub", headers.Sub,
+								"emby_user_id", embyUserID,
+								"new_name", embyUsername,
+								"error", err,
+							)
+							// Non-fatal: continue with auth using old name.
+						}
+					}
+				}
 			} else {
-				// User not in DB — check if user exists in Emby.
-				existingUser, err := embyClient.FindUserByName(ctx, headers.Email)
+				// User not in DB — check if user exists in Emby by the desired username.
+				existingUser, err := embyClient.FindUserByName(ctx, embyUsername)
 				if err != nil {
 					slog.Error("emby user lookup failed",
-						"email", headers.Email,
+						"sub", headers.Sub,
+						"username", embyUsername,
 						"error", err,
 					)
 					http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
@@ -237,14 +318,15 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					// User exists in Emby but not in DB — adopt user.
 					embyUserID = existingUser.ID
 					slog.Info("adopting existing Emby user",
-						"email", headers.Email,
+						"sub", headers.Sub,
+						"username", embyUsername,
 						"emby_user_id", embyUserID,
 					)
 
 					// Update password in Emby.
 					if err := embyClient.UpdatePassword(ctx, embyUserID, userPassword); err != nil {
 						slog.Error("failed to update password for adopted user",
-							"email", headers.Email,
+							"sub", headers.Sub,
 							"emby_user_id", embyUserID,
 							"error", err,
 						)
@@ -254,13 +336,15 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				} else {
 					// User doesn't exist anywhere — create new user.
 					slog.Info("provisioning new user",
-						"email", headers.Email,
+						"sub", headers.Sub,
+						"username", embyUsername,
 					)
 
-					newUser, err := embyClient.CreateUser(ctx, headers.Email, templateUserID)
+					newUser, err := embyClient.CreateUser(ctx, embyUsername, templateUserID)
 					if err != nil {
 						slog.Error("failed to create user in Emby",
-							"email", headers.Email,
+							"sub", headers.Sub,
+							"username", embyUsername,
 							"error", err,
 						)
 						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -271,7 +355,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					// Set password.
 					if err := embyClient.UpdatePassword(ctx, embyUserID, userPassword); err != nil {
 						slog.Error("failed to set password for new user",
-							"email", headers.Email,
+							"sub", headers.Sub,
 							"emby_user_id", embyUserID,
 							"error", err,
 						)
@@ -283,7 +367,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					policyJSON, polBuildErr := buildUserPolicy(templatePolicy)
 					if polBuildErr != nil {
 						slog.Error("failed to build user policy",
-							"email", headers.Email,
+							"sub", headers.Sub,
 							"error", polBuildErr,
 						)
 						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -291,7 +375,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					}
 					if err := embyClient.UpdatePolicyRaw(ctx, embyUserID, policyJSON); err != nil {
 						slog.Error("failed to update policy for new user",
-							"email", headers.Email,
+							"sub", headers.Sub,
 							"emby_user_id", embyUserID,
 							"error", err,
 						)
@@ -301,9 +385,9 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 
 				// Store user in database.
-				if err := database.InsertUser(headers.Email, embyUserID, userPassword); err != nil {
+				if err := database.InsertUser(headers.Sub, headers.Name, headers.Email, embyUserID, userPassword); err != nil {
 					slog.Error("failed to store user in database",
-						"email", headers.Email,
+						"sub", headers.Sub,
 						"emby_user_id", embyUserID,
 						"error", err,
 					)
@@ -312,30 +396,31 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 
 				slog.Info("user provisioned successfully",
-					"email", headers.Email,
+					"sub", headers.Sub,
+					"username", embyUsername,
 					"emby_user_id", embyUserID,
 				)
 			}
 
-			// Authenticate with Emby.
-			authResult, err := embyClient.AuthenticateByName(ctx, headers.Email, userPassword)
+			// Authenticate with Emby using the current Emby username.
+			authResult, err := embyClient.AuthenticateByName(ctx, embyUsername, userPassword)
 			if err != nil {
 				// If user was in DB but auth failed, they may have been deleted from Emby.
 				// Check if user still exists and re-provision if needed.
 				if record != nil {
 					slog.Warn("authentication failed for existing DB user, checking if user was deleted from Emby",
-						"email", headers.Email,
+						"sub", headers.Sub,
 						"emby_user_id", embyUserID,
 						"error", err,
 					)
 
 					// Delete stale cache entry.
-					sessionCache.Delete(headers.Email)
+					sessionCache.Delete(headers.Sub)
 
-					existingUser, lookupErr := embyClient.FindUserByName(ctx, headers.Email)
+					existingUser, lookupErr := embyClient.FindUserByName(ctx, embyUsername)
 					if lookupErr != nil {
 						slog.Error("emby user lookup failed during re-provision check",
-							"email", headers.Email,
+							"sub", headers.Sub,
 							"error", lookupErr,
 						)
 						http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
@@ -343,9 +428,9 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					}
 
 					// Delete stale DB record.
-					if delErr := database.DeleteUser(headers.Email); delErr != nil {
+					if delErr := database.DeleteUser(headers.Sub); delErr != nil {
 						slog.Error("failed to delete stale user record",
-							"email", headers.Email,
+							"sub", headers.Sub,
 							"error", delErr,
 						)
 						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -359,12 +444,12 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						// User still exists in Emby (password mismatch or disabled) — update password and re-enable.
 						embyUserID = existingUser.ID
 						slog.Warn("re-adopting Emby user after auth failure",
-							"email", headers.Email,
+							"sub", headers.Sub,
 							"emby_user_id", embyUserID,
 						)
 						if pwErr := embyClient.UpdatePassword(ctx, embyUserID, userPassword); pwErr != nil {
 							slog.Error("failed to update password during re-provision",
-								"email", headers.Email,
+								"sub", headers.Sub,
 								"error", pwErr,
 							)
 							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -375,7 +460,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						if polBuildErr == nil {
 							if polErr := embyClient.UpdatePolicyRaw(ctx, embyUserID, policyJSON); polErr != nil {
 								slog.Warn("failed to re-enable user during re-adoption",
-									"email", headers.Email,
+									"sub", headers.Sub,
 									"error", polErr,
 								)
 							}
@@ -383,12 +468,13 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					} else {
 						// User was deleted from Emby — create fresh.
 						slog.Warn("user deleted from Emby, re-provisioning",
-							"email", headers.Email,
+							"sub", headers.Sub,
+							"username", embyUsername,
 						)
-						newUser, createErr := embyClient.CreateUser(ctx, headers.Email, templateUserID)
+						newUser, createErr := embyClient.CreateUser(ctx, embyUsername, templateUserID)
 						if createErr != nil {
 							slog.Error("failed to re-create user in Emby",
-								"email", headers.Email,
+								"sub", headers.Sub,
 								"error", createErr,
 							)
 							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -398,7 +484,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 
 						if pwErr := embyClient.UpdatePassword(ctx, embyUserID, userPassword); pwErr != nil {
 							slog.Error("failed to set password for re-created user",
-								"email", headers.Email,
+								"sub", headers.Sub,
 								"error", pwErr,
 							)
 							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -408,7 +494,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						policyJSON, polBuildErr := buildUserPolicy(templatePolicy)
 						if polBuildErr != nil {
 							slog.Error("failed to build user policy for re-created user",
-								"email", headers.Email,
+								"sub", headers.Sub,
 								"error", polBuildErr,
 							)
 							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -416,7 +502,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						}
 						if polErr := embyClient.UpdatePolicyRaw(ctx, embyUserID, policyJSON); polErr != nil {
 							slog.Error("failed to update policy for re-created user",
-								"email", headers.Email,
+								"sub", headers.Sub,
 								"error", polErr,
 							)
 							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -425,9 +511,9 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					}
 
 					// Store new record in DB.
-					if insErr := database.InsertUser(headers.Email, embyUserID, userPassword); insErr != nil {
+					if insErr := database.InsertUser(headers.Sub, headers.Name, headers.Email, embyUserID, userPassword); insErr != nil {
 						slog.Error("failed to store re-provisioned user in database",
-							"email", headers.Email,
+							"sub", headers.Sub,
 							"error", insErr,
 						)
 						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -435,10 +521,10 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					}
 
 					// Retry authentication.
-					authResult, err = embyClient.AuthenticateByName(ctx, headers.Email, userPassword)
+					authResult, err = embyClient.AuthenticateByName(ctx, embyUsername, userPassword)
 					if err != nil {
 						slog.Error("authentication still failed after re-provision",
-							"email", headers.Email,
+							"sub", headers.Sub,
 							"error", err,
 						)
 						http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -446,12 +532,12 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					}
 
 					slog.Info("user re-provisioned and authenticated successfully",
-						"email", headers.Email,
+						"sub", headers.Sub,
 						"emby_user_id", embyUserID,
 					)
 				} else {
 					slog.Error("authentication with Emby failed",
-						"email", headers.Email,
+						"sub", headers.Sub,
 						"error", err,
 					)
 					http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -460,12 +546,12 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			}
 
 			slog.Info("authenticated with Emby",
-				"email", headers.Email,
+				"sub", headers.Sub,
 				"emby_user_id", authResult.User.ID,
 			)
 
 			// Store session in cache for subsequent requests.
-			sessionCache.Store(headers.Email, &cachedSession{
+			sessionCache.Store(headers.Sub, &cachedSession{
 				accessToken: authResult.AccessToken,
 				userID:      authResult.User.ID,
 				serverID:    authResult.ServerID,
@@ -480,22 +566,22 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					(record.PictureSyncedAt.IsZero() && record.PictureURL != "")
 				if shouldSync {
 					// Only start a sync if one isn't already in flight for this user.
-					if _, loaded := pictureSyncInFlight.LoadOrStore(headers.Email, true); !loaded {
+					if _, loaded := pictureSyncInFlight.LoadOrStore(headers.Sub, true); !loaded {
 						pictureURL := headers.PictureURL
-						userEmail := headers.Email
+						userSub := headers.Sub
 						go func() {
-							defer pictureSyncInFlight.Delete(userEmail)
+							defer pictureSyncInFlight.Delete(userSub)
 							if err := embyClient.SetProfileImage(context.Background(), embyUserID, pictureURL); err != nil {
 								slog.Warn("failed to set profile image",
-									"email", userEmail,
+									"sub", userSub,
 									"emby_user_id", embyUserID,
 									"error", err,
 								)
 								return
 							}
-							if err := database.UpdatePictureURL(userEmail, pictureURL); err != nil {
+							if err := database.UpdatePictureURL(userSub, pictureURL); err != nil {
 								slog.Warn("failed to update stored picture URL",
-									"email", userEmail,
+									"sub", userSub,
 									"error", err,
 								)
 							}
@@ -510,7 +596,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				currentPolicy, fetchErr := embyClient.GetUserPolicy(context.Background(), embyUserID)
 				if fetchErr != nil {
 					slog.Warn("failed to fetch current user policy",
-						"email", headers.Email,
+						"sub", headers.Sub,
 						"emby_user_id", embyUserID,
 						"error", fetchErr,
 					)
@@ -528,7 +614,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 				if err := embyClient.UpdatePolicyRaw(context.Background(), embyUserID, updatedPolicy); err != nil {
 					slog.Warn("failed to enforce user policy",
-						"email", headers.Email,
+						"sub", headers.Sub,
 						"emby_user_id", embyUserID,
 						"error", err,
 					)

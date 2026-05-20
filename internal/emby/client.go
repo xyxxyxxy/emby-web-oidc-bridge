@@ -364,6 +364,35 @@ func (c *Client) SetProfileImage(ctx context.Context, userID string, imageURL st
 	return nil
 }
 
+// UpdateUserName renames an Emby user by updating their Name field via POST /Users/{Id}.
+func (c *Client) UpdateUserName(ctx context.Context, userID, newName string) error {
+	url := fmt.Sprintf("%s/Users/%s?api_key=%s", c.baseURL, userID, c.apiKey)
+
+	body := map[string]string{"Name": newName}
+	reqBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("emby: marshal update user name request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("emby: create update user name request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("emby: update user name request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := checkResponse(resp); err != nil {
+		return fmt.Errorf("emby: update user name: %w", err)
+	}
+
+	return nil
+}
+
 // Ping checks connectivity to the Emby server.
 func (c *Client) Ping(ctx context.Context) error {
 	url := fmt.Sprintf("%s/System/Info?api_key=%s", c.baseURL, c.apiKey)

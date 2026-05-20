@@ -80,10 +80,10 @@ func TestIntegrationError_UntrustedIPRejection(t *testing.T) {
 	}
 }
 
-// TestIntegrationError_MissingEmailHeader verifies that a request from a trusted IP
-// without X-Forwarded-Email is rejected with 401 Unauthorized.
+// TestIntegrationError_MissingSub verifies that a request from a trusted IP
+// without a sub claim is rejected with 401 Unauthorized.
 // Validates: Requirements 1.4
-func TestIntegrationError_MissingEmailHeader(t *testing.T) {
+func TestIntegrationError_MissingSub(t *testing.T) {
 	database, err := db.Open(errorDBURI())
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
@@ -91,7 +91,7 @@ func TestIntegrationError_MissingEmailHeader(t *testing.T) {
 	defer database.Close()
 
 	embyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("Emby server should not be called when email header is missing")
+		t.Error("Emby server should not be called when sub is missing")
 	}))
 	defer embyServer.Close()
 
@@ -103,7 +103,8 @@ func TestIntegrationError_MissingEmailHeader(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345" // Trusted IP.
-	// No X-Forwarded-Email header.
+	// No sub header or JWT — only email.
+	req.Header.Set("X-Forwarded-Email", "user@example.com")
 	rec := httptest.NewRecorder()
 
 	chain.ServeHTTP(rec, req)
@@ -134,6 +135,7 @@ func TestIntegrationError_EmbyAPIUnreachable(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("X-Forwarded-Sub", "sub-unreachable")
 	req.Header.Set("X-Forwarded-Email", "unreachable@example.com")
 	rec := httptest.NewRecorder()
 
@@ -178,6 +180,7 @@ func TestIntegrationError_UserCreationFailure(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("X-Forwarded-Sub", "sub-failcreate")
 	req.Header.Set("X-Forwarded-Email", "failcreate@example.com")
 	rec := httptest.NewRecorder()
 
