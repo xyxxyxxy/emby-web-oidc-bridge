@@ -89,3 +89,61 @@ func TestAccount_ValidUser_RendersCredentials(t *testing.T) {
 		t.Errorf("expected Content-Type text/html, got %q", contentType)
 	}
 }
+
+func TestAccount_XAuthRequestEmailFallback(t *testing.T) {
+	database := setupTestDB(t)
+
+	err := database.InsertUser("fallback@example.com", "emby-fb", "fbpass99")
+	if err != nil {
+		t.Fatalf("failed to insert test user: %v", err)
+	}
+
+	h := handler.Account(database)
+
+	req := httptest.NewRequest(http.MethodGet, "/account", nil)
+	// Use X-Auth-Request-Email instead of X-Forwarded-Email.
+	req.Header.Set("X-Auth-Request-Email", "fallback@example.com")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "fallback@example.com") {
+		t.Error("response body does not contain user email from X-Auth-Request-Email fallback")
+	}
+	if !strings.Contains(body, "fbpass99") {
+		t.Error("response body does not contain user password")
+	}
+}
+
+func TestAccount_XForwardedEmailTakesPrecedence(t *testing.T) {
+	database := setupTestDB(t)
+
+	err := database.InsertUser("primary@example.com", "emby-pri", "pripass")
+	if err != nil {
+		t.Fatalf("failed to insert test user: %v", err)
+	}
+
+	h := handler.Account(database)
+
+	req := httptest.NewRequest(http.MethodGet, "/account", nil)
+	// Both headers set — X-Forwarded-Email should take precedence.
+	req.Header.Set("X-Forwarded-Email", "primary@example.com")
+	req.Header.Set("X-Auth-Request-Email", "other@example.com")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "primary@example.com") {
+		t.Error("response body should use X-Forwarded-Email when both headers are present")
+	}
+}

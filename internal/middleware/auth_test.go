@@ -1,6 +1,7 @@
 package middleware_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -518,6 +519,390 @@ func TestAuth_MissingOptionalHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Email", "nooptional@example.com")
 	// No X-Forwarded-User or X-Forwarded-Picture headers.
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !next.called {
+		t.Error("next handler should have been called")
+	}
+}
+
+// TestExtractPictureFromJWT_ValidToken verifies picture extraction from a valid JWT payload.
+func TestExtractPictureFromJWT_ValidToken(t *testing.T) {
+	// Build a JWT with a picture claim.
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user123","picture":"https://example.com/photo.jpg","email":"user@example.com"}`))
+	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesignature"))
+	token := header + "." + payload + "." + signature
+
+	got := middleware.ExtractPictureFromJWT(token)
+	if got != "https://example.com/photo.jpg" {
+		t.Errorf("ExtractPictureFromJWT = %q, want %q", got, "https://example.com/photo.jpg")
+	}
+}
+
+// TestExtractPictureFromJWT_NoPictureClaim verifies empty string when picture claim is absent.
+func TestExtractPictureFromJWT_NoPictureClaim(t *testing.T) {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user123","email":"user@example.com"}`))
+	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesignature"))
+	token := header + "." + payload + "." + signature
+
+	got := middleware.ExtractPictureFromJWT(token)
+	if got != "" {
+		t.Errorf("ExtractPictureFromJWT = %q, want empty string", got)
+	}
+}
+
+// TestExtractPictureFromJWT_InvalidToken verifies empty string for malformed tokens.
+func TestExtractPictureFromJWT_InvalidToken(t *testing.T) {
+	tests := []struct {
+		name  string
+		token string
+	}{
+		{"empty string", ""},
+		{"no dots", "nodots"},
+		{"one dot", "one.dot"},
+		{"invalid base64 payload", "header.!!!invalid!!!.signature"},
+		{"invalid JSON payload", "header." + base64.RawURLEncoding.EncodeToString([]byte("not json")) + ".sig"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := middleware.ExtractPictureFromJWT(tt.token)
+			if got != "" {
+				t.Errorf("ExtractPictureFromJWT(%q) = %q, want empty string", tt.token, got)
+			}
+		})
+	}
+}
+
+// TestExtractPictureFromJWT_PaddingVariants verifies base64 padding handling.
+func TestExtractPictureFromJWT_PaddingVariants(t *testing.T) {
+	// Create payloads of different lengths to exercise padding branches.
+	// The function adds padding based on len(payload) % 4.
+	tests := []struct {
+		name    string
+		claims  map[string]string
+		wantPic string
+	}{
+		{
+			name:    "short URL",
+			claims:  map[string]string{"picture": "https://a.co/p"},
+			wantPic: "https://a.co/p",
+		},
+		{
+			name:    "longer URL",
+			claims:  map[string]string{"picture": "https://example.com/users/12345/avatar.png"},
+			wantPic: "https://example.com/users/12345/avatar.png",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payloadJSON, _ := json.Marshal(tt.claims)
+			header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256"}`))
+			payload := base64.RawURLEncoding.EncodeToString(payloadJSON)
+			token := header + "." + payload + ".sig"
+
+			got := middleware.ExtractPictureFromJWT(token)
+			if got != tt.wantPic {
+				t.Errorf("ExtractPictureFromJWT = %q, want %q", got, tt.wantPic)
+			}
+		})
+	}
+}
+
+// TestBuildUserPolicy_OverridesFields verifies that buildUserPolicy sets IsDisabled=false
+// and EnableUserPreferenceAccess=false while preserving other fields.
+func TestBuildUserPolicy_OverridesFields(t *testing.T) {
+	templatePolicy := []byte(`{
+		"IsDisabled": true,
+		"IsHidden": true,
+		"EnableUserPreferenceAccess": true,
+		"MaxParentalRating": 10,
+		"BlockedTags": ["adult"]
+	}`)
+
+	result, err := middleware.BuildUserPolicy(templatePolicy)
+	if err != nil {
+		t.Fatalf("BuildUserPolicy failed: %v", err)
+	}
+
+	var policy map[string]interface{}
+	if err := json.Unmarshal(result, &policy); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	// IsDisabled should be overridden to false.
+	if isDisabled, ok := policy["IsDisabled"].(bool); !ok || isDisabled {
+		t.Errorf("IsDisabled = %v, want false", policy["IsDisabled"])
+	}
+
+	// EnableUserPreferenceAccess should be overridden to false.
+	if prefAccess, ok := policy["EnableUserPreferenceAccess"].(bool); !ok || prefAccess {
+		t.Errorf("EnableUserPreferenceAccess = %v, want false", policy["EnableUserPreferenceAccess"])
+	}
+
+	// IsHidden should be preserved from template.
+	if isHidden, ok := policy["IsHidden"].(bool); !ok || !isHidden {
+		t.Errorf("IsHidden = %v, want true (preserved from template)", policy["IsHidden"])
+	}
+
+	// MaxParentalRating should be preserved.
+	if rating, ok := policy["MaxParentalRating"].(float64); !ok || rating != 10 {
+		t.Errorf("MaxParentalRating = %v, want 10 (preserved from template)", policy["MaxParentalRating"])
+	}
+
+	// BlockedTags should be preserved.
+	if tags, ok := policy["BlockedTags"].([]interface{}); !ok || len(tags) != 1 {
+		t.Errorf("BlockedTags = %v, want [\"adult\"] (preserved from template)", policy["BlockedTags"])
+	}
+}
+
+// TestBuildUserPolicy_InvalidJSON verifies error handling for invalid JSON input.
+func TestBuildUserPolicy_InvalidJSON(t *testing.T) {
+	_, err := middleware.BuildUserPolicy([]byte("not valid json"))
+	if err == nil {
+		t.Error("BuildUserPolicy should return error for invalid JSON")
+	}
+}
+
+// TestAuth_XAuthRequestEmailFallback verifies that X-Auth-Request-Email is used
+// when X-Forwarded-Email is not present.
+func TestAuth_XAuthRequestEmailFallback(t *testing.T) {
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer database.Close()
+
+	// Pre-insert user.
+	err = database.InsertUser("fallback@example.com", "user-fb", "fbpass")
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "fb-token",
+				"User":        map[string]interface{}{"Id": "user-fb", "Name": "fallback@example.com"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/user-fb/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	// Use X-Auth-Request-Email instead of X-Forwarded-Email.
+	req.Header.Set("X-Auth-Request-Email", "fallback@example.com")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !next.called {
+		t.Error("next handler should have been called with X-Auth-Request-Email fallback")
+	}
+	if next.authToken != "fb-token" {
+		t.Errorf("expected auth token %q, got %q", "fb-token", next.authToken)
+	}
+}
+
+// TestAuth_XAuthRequestUserFallback verifies that X-Auth-Request-User is used
+// when X-Forwarded-User is not present.
+func TestAuth_XAuthRequestUserFallback(t *testing.T) {
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer database.Close()
+
+	err = database.InsertUser("userfb@example.com", "user-ufb", "ufbpass")
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "ufb-token",
+				"User":        map[string]interface{}{"Id": "user-ufb", "Name": "userfb@example.com"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/user-ufb/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Auth-Request-Email", "userfb@example.com")
+	req.Header.Set("X-Auth-Request-User", "Display Name")
+	// No X-Forwarded-User set — should use X-Auth-Request-User.
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !next.called {
+		t.Error("next handler should have been called")
+	}
+}
+
+// TestAuth_XAuthRequestPictureFallback verifies that X-Auth-Request-Picture is used
+// when X-Forwarded-Picture is not present.
+func TestAuth_XAuthRequestPictureFallback(t *testing.T) {
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer database.Close()
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		// User not found — will be created.
+		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Items": []map[string]interface{}{},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "pic-user-1",
+				"Name": "picfb@example.com",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/pic-user-1/Password", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/pic-user-1/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "pic-token",
+				"User":        map[string]interface{}{"Id": "pic-user-1", "Name": "picfb@example.com"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		// Profile image endpoint — should be called with the picture URL.
+		mux.HandleFunc("/Users/pic-user-1/Images/Primary", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Auth-Request-Email", "picfb@example.com")
+	req.Header.Set("X-Auth-Request-Picture", "https://example.com/avatar.jpg")
+	// No X-Forwarded-Picture set — should use X-Auth-Request-Picture.
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !next.called {
+		t.Error("next handler should have been called")
+	}
+}
+
+// TestAuth_JWTPictureExtraction verifies that picture URL is extracted from
+// the Authorization header JWT when no picture headers are present.
+func TestAuth_JWTPictureExtraction(t *testing.T) {
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer database.Close()
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Items": []map[string]interface{}{},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "jwt-user-1",
+				"Name": "jwt@example.com",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/jwt-user-1/Password", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/jwt-user-1/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "jwt-token",
+				"User":        map[string]interface{}{"Id": "jwt-user-1", "Name": "jwt@example.com"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/jwt-user-1/Images/Primary", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	// Build a JWT with a picture claim.
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"jwt-user","picture":"https://example.com/jwt-avatar.png","email":"jwt@example.com"}`))
+	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesig"))
+	jwtToken := header + "." + payload + "." + signature
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Email", "jwt@example.com")
+	// No picture headers — should fall through to JWT extraction.
+	req.Header.Set("Authorization", "Bearer "+jwtToken)
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
