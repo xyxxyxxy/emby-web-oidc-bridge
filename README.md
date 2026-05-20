@@ -25,16 +25,13 @@ Users are automatically provisioned on first login with settings copied from a c
 ## Features
 
 - Automatic user provisioning from OIDC identity
-- Stable user identity via OIDC `sub` claim (username/email changes don't create duplicates)
-- Username derived from `preferred_username` > `name` > `email` with uniqueness fallback
-- Automatic sync of username/email changes from OIDC provider to Emby
 - Seamless web login (no username/password entry)
 - Template-based user creation (inherit permissions from a configured user)
 - Profile image sync from OIDC claims (both modes, see [Profile Image Sync](#profile-image-sync))
 - Account page showing credentials for TV/mobile apps
-- Health check endpoint (`/health`)
 - Trusted proxy IP validation
-- Single static binary (~10MB Docker image)
+- Username derived from `preferred_username` > `name` > `email` with uniqueness fallback
+- Automatic sync of username/email changes from OIDC provider to Emby
 
 ## Security Model
 
@@ -119,9 +116,10 @@ Browser → Reverse Proxy → oauth2-proxy → bridge → Emby
 ```ini
 upstreams = ["http://emby-bridge:8080"]
 pass_user_headers = true
+set_authorization_header = true
 ```
 
-`pass_user_headers = true` makes oauth2-proxy set `X-Forwarded-Email`, `X-Forwarded-User`, and `X-Forwarded-Picture` on requests forwarded to the upstream.
+`pass_user_headers = true` makes oauth2-proxy set `X-Forwarded-Email`, `X-Forwarded-User`, and `X-Forwarded-Picture` on requests forwarded to the upstream. `set_authorization_header = true` forwards the ID token as `Authorization: Bearer <token>`, which the bridge decodes to extract `sub`, `preferred_username`, `name`, and `picture` claims.
 
 Set `TRUSTED_PROXIES` in the bridge to the IP/subnet that oauth2-proxy connects from.
 
@@ -155,7 +153,7 @@ emby.example.com {
     handle {
         forward_auth oauth2-proxy:4180 {
             uri /oauth2/auth
-            copy_headers X-Auth-Request-User X-Auth-Request-Email Authorization
+            copy_headers X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Preferred-Username Authorization
 
             @error status 401
             handle_response @error {
@@ -198,12 +196,12 @@ If the preferred username is already taken by another Emby user during account c
 The bridge syncs the user's OIDC profile picture to Emby on every login. It tries multiple methods in order:
 
 1. `X-Forwarded-Picture` / `X-Auth-Request-Picture` headers (if forwarded by proxy)
-2. OIDC userinfo endpoint (if `OIDC_ISSUER_URL` is set and an access token is forwarded)
-3. JWT ID token decoding (if `Authorization: Bearer <id_token>` header is present)
+2. JWT ID token decoding (if `Authorization: Bearer <id_token>` header is present)
+3. OIDC userinfo endpoint (if `OIDC_ISSUER_URL` is set and an access token is forwarded)
 
-**Option A (upstream mode):** Set `pass_user_headers = true` and `OIDC_ISSUER_URL`. Works via method 1 or 2.
+**Option A (upstream mode):** Set `pass_user_headers = true`, `set_authorization_header = true`, and `OIDC_ISSUER_URL`. Works via all methods.
 
-**Option B (forward_auth mode):** Set `set_authorization_header = true` in oauth2-proxy, copy the `Authorization` header in Caddy, and set `OIDC_ISSUER_URL`. Works via method 3 (JWT decoding).
+**Option B (forward_auth mode):** Set `set_authorization_header = true` in oauth2-proxy, copy the `Authorization` header in Caddy, and set `OIDC_ISSUER_URL`. Works via method 2 (JWT decoding).
 
 Both modes support profile image sync when configured correctly. Your OIDC provider must include the `picture` claim in the ID token (add `profile` scope if needed).
 

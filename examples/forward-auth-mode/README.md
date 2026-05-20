@@ -4,9 +4,22 @@ This setup uses a reverse proxy (Caddy) with oauth2-proxy as a forward_auth prov
 
 ## Trade-offs
 
-- **No profile image sync** — oauth2-proxy's `set_xauthrequest` does not include the picture claim in the auth response
+- Slightly more complex setup — requires configuring header forwarding in Caddy
 - More flexible routing — your reverse proxy controls all traffic
 - Works well if you already have Caddy/Nginx/Traefik managing multiple services
+- Profile image sync works via JWT ID token extraction (`set_authorization_header = true`)
+
+## How Identity is Extracted
+
+The bridge extracts user identity from the JWT ID token forwarded via the `Authorization` header. Caddy copies this header from the oauth2-proxy auth response.
+
+| Claim | Purpose |
+|-------|---------|
+| `sub` | Stable user identifier (required) — links OIDC identity to Emby account |
+| `preferred_username` | First choice for Emby username (e.g. "johndoe") |
+| `name` | Second choice for Emby username (e.g. "John Doe") |
+| `email` | Final fallback for Emby username; also stored for reference |
+| `picture` | Profile image URL synced to Emby |
 
 ## Request Flow
 
@@ -44,4 +57,4 @@ Browser → Caddy → (auth subrequest: oauth2-proxy) → emby-web-oidc-bridge �
 - The bridge container runs as read-only with no-new-privileges for security.
 - The `bridge-data` volume persists the SQLite database across restarts.
 - Emby is not included in this compose file — point `EMBY_API_URL` to your existing Emby instance.
-- Profile image sync is **not available** in this mode. Use [upstream mode](../upstream-mode/) if you need it.
+- Profile image sync is available in this mode via JWT ID token extraction (the `Authorization` header carries the ID token with the `picture` claim).

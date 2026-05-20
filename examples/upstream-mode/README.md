@@ -4,9 +4,23 @@ This is the **recommended** deployment mode. oauth2-proxy handles OIDC authentic
 
 ## Benefits
 
+- Full identity extraction from JWT ID token (`sub`, `preferred_username`, `name`, `email`, `picture`)
 - Profile image sync from OIDC claims works automatically
 - Simpler setup — no separate reverse proxy config needed between oauth2-proxy and the bridge
-- All identity headers (`X-Forwarded-Email`, `X-Forwarded-User`, `X-Forwarded-Picture`) are set by oauth2-proxy
+
+## How Identity is Extracted
+
+The bridge extracts user identity from the JWT ID token forwarded by oauth2-proxy. The key claims used:
+
+| Claim | Purpose |
+|-------|---------|
+| `sub` | Stable user identifier (required) — links OIDC identity to Emby account |
+| `preferred_username` | First choice for Emby username (e.g. "johndoe") |
+| `name` | Second choice for Emby username (e.g. "John Doe") |
+| `email` | Final fallback for Emby username; also stored for reference |
+| `picture` | Profile image URL synced to Emby |
+
+oauth2-proxy also sets `X-Forwarded-Email` and `X-Forwarded-User` headers, but the bridge prefers JWT claims since `X-Forwarded-User` often contains the `sub` UUID rather than a display name.
 
 ## Request Flow
 
