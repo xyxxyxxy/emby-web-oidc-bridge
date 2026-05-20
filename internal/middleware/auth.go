@@ -315,7 +315,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					userPassword = password.Generate()
 
 					if existingUser != nil {
-						// User still exists in Emby (password mismatch) — update password.
+						// User still exists in Emby (password mismatch or disabled) — update password and re-enable.
 						embyUserID = existingUser.ID
 						slog.Warn("re-adopting Emby user after auth failure",
 							"email", headers.Email,
@@ -328,6 +328,16 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 							)
 							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 							return
+						}
+						// Re-enable user in case they were disabled.
+						policyJSON, polBuildErr := buildUserPolicy(templatePolicy)
+						if polBuildErr == nil {
+							if polErr := embyClient.UpdatePolicyRaw(ctx, embyUserID, policyJSON); polErr != nil {
+								slog.Warn("failed to re-enable user during re-adoption",
+									"email", headers.Email,
+									"error", polErr,
+								)
+							}
 						}
 					} else {
 						// User was deleted from Emby — create fresh.
