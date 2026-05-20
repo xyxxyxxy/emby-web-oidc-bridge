@@ -3,6 +3,7 @@ package emby
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -340,14 +341,15 @@ func (c *Client) SetProfileImage(ctx context.Context, userID string, imageURL st
 		return fmt.Errorf("emby: read image bytes: %w", err)
 	}
 
-	// POST image bytes to Emby.
+	// POST base64-encoded image to Emby.
 	url := fmt.Sprintf("%s/Users/%s/Images/Primary?api_key=%s", c.baseURL, userID, c.apiKey)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(imageBytes))
+	encoded := base64.StdEncoding.EncodeToString(imageBytes)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte(encoded)))
 	if err != nil {
 		return fmt.Errorf("emby: create set image request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Type", "image/png")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
