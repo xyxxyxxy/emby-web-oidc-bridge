@@ -2,6 +2,19 @@
 
 A lightweight Go service that enables OIDC single sign-on for Emby's web interface via [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/).
 
+## Architecture
+
+```
+┌─────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────┐
+│ Browser │────▶│ oauth2-proxy │────▶│   Bridge    │────▶│ Emby │
+└─────────┘     └──────────────┘     └─────────────┘     └──────┘
+                                            │
+                                            ▼
+                                       ┌────────┐
+                                       │ SQLite │
+                                       └────────┘
+```
+
 ## Motivation
 
 Emby doesn't support SSO or OpenID Connect natively, and the [feature request](https://emby.media/community/topic/114493-sso-openid/) doesn't look like it's going anywhere soon. Since a full SSO solution across all Emby clients (TV apps, mobile, etc.) is non-trivial, this bridge takes a pragmatic approach: it enables OIDC authentication for the web interface, and provides generated credentials for TV/mobile apps where OAuth flows aren't supported.
@@ -202,19 +215,6 @@ The bridge syncs the user's OIDC profile picture to Emby on every login. It trie
 **Option B (forward_auth mode):** Set `set_authorization_header = true` in oauth2-proxy, copy the `Authorization` header in Caddy, and set `OIDC_ISSUER_URL`. Works via method 2 (JWT decoding).
 
 Both modes support profile image sync when configured correctly. Your OIDC provider must include the `picture` claim in the ID token (add `profile` scope if needed).
-
-## Architecture
-
-```
-┌─────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────┐
-│ Browser │───▶│ oauth2-proxy │───▶│   Bridge    │───▶│ Emby │
-└─────────┘     └──────────────┘     └─────────────┘     └──────┘
-                                            │
-                                            ▼
-                                       ┌────────┐
-                                       │ SQLite │
-                                       └────────┘
-```
 
 ### Request Flow
 
