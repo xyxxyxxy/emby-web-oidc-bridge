@@ -41,7 +41,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 	slog.Info("database opened", "path", cfg.DatabasePath)
 
 	// Create Emby client.

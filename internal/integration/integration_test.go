@@ -53,7 +53,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	var mu sync.Mutex
 	var calls []apiCall
@@ -67,14 +67,14 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/Users/Query":
 			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/New":
 			var body struct {
 				Name           string `json:"Name"`
 				CopyFromUserID string `json:"CopyFromUserId"`
 			}
-			json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			if body.Name != "New User" {
 				t.Errorf("CreateUser: expected Name 'New User', got %q", body.Name)
 			}
@@ -83,7 +83,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 			}
 			resp := map[string]interface{}{"Id": "created-user-001", "Name": "New User"}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/created-user-001/Password":
 			w.WriteHeader(http.StatusNoContent)
@@ -97,7 +97,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/AuthenticateByName":
 			resp := map[string]interface{}{
@@ -106,7 +106,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -120,7 +120,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 		receivedToken = r.Header.Get("X-Emby-Token")
 		receivedPath = r.URL.Path
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("backend OK"))
+		_, _ = w.Write([]byte("backend OK"))
 	}))
 	defer backend.Close()
 
@@ -194,7 +194,7 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	err = database.InsertUser("sub-existing", "Existing User", "existing@example.com", "emby-user-100", "mypassw1")
 	if err != nil {
@@ -216,7 +216,7 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 				Username string `json:"Username"`
 				Pw       string `json:"Pw"`
 			}
-			json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			authPassword = body.Pw
 
 			if body.Username != "Existing User" {
@@ -229,7 +229,7 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/emby-user-100/Policy":
 			w.WriteHeader(http.StatusNoContent)
@@ -240,7 +240,7 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		default:
 			t.Errorf("unexpected API call: %s %s", r.Method, r.URL.Path)
@@ -253,7 +253,7 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedToken = r.Header.Get("X-Emby-Token")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("proxied"))
+		_, _ = w.Write([]byte("proxied"))
 	}))
 	defer backend.Close()
 
@@ -302,7 +302,7 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	var mu sync.Mutex
 	var calls []apiCall
@@ -320,7 +320,7 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/adopted-emby-555/Password":
 			w.WriteHeader(http.StatusNoContent)
@@ -334,7 +334,7 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/AuthenticateByName":
 			resp := map[string]interface{}{
@@ -343,7 +343,7 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 
 		default:
 			t.Errorf("unexpected API call: %s %s", r.Method, r.URL.Path)
@@ -356,7 +356,7 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedToken = r.Header.Get("X-Emby-Token")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("adopted OK"))
+		_, _ = w.Write([]byte("adopted OK"))
 	}))
 	defer backend.Close()
 
@@ -428,7 +428,7 @@ func TestIntegration_RequestBodyPreserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	err = database.InsertUser("sub-body", "Body User", "body@example.com", "emby-body-user", "bodypass1")
 	if err != nil {
@@ -444,7 +444,7 @@ func TestIntegration_RequestBodyPreserved(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/emby-body-user/Policy":
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet && r.URL.Path == "/Users/emby-body-user":
@@ -453,7 +453,7 @@ func TestIntegration_RequestBodyPreserved(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		default:
 			w.WriteHeader(http.StatusOK)
 		}
@@ -502,7 +502,7 @@ func TestIntegration_AuthTokenForwardedToProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	err = database.InsertUser("sub-token", "Token User", "token@example.com", "emby-token-user", "tokenpw1")
 	if err != nil {
@@ -518,7 +518,7 @@ func TestIntegration_AuthTokenForwardedToProxy(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/emby-token-user/Policy":
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet && r.URL.Path == "/Users/emby-token-user":
@@ -527,7 +527,7 @@ func TestIntegration_AuthTokenForwardedToProxy(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		default:
 			w.WriteHeader(http.StatusOK)
 		}

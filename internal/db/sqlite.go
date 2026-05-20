@@ -51,14 +51,14 @@ func Open(path string) (*DB, error) {
 
 	conn, err := pool.Take(context.Background())
 	if err != nil {
-		pool.Close()
+		_ = pool.Close()
 		return nil, fmt.Errorf("open database: take connection: %w", err)
 	}
 	defer pool.Put(conn)
 
 	err = sqlitex.ExecuteScript(conn, schema, nil)
 	if err != nil {
-		pool.Close()
+		_ = pool.Close()
 		return nil, fmt.Errorf("open database: initialize schema: %w", err)
 	}
 

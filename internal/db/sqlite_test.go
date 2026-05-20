@@ -21,7 +21,7 @@ func TestOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 }
 
 func TestInsertAndFindUserBySub(t *testing.T) {
@@ -29,7 +29,7 @@ func TestInsertAndFindUserBySub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	err = database.InsertUser("sub-123", "Alice", "alice@example.com", "user123", "abcd1234")
 	if err != nil {
@@ -68,7 +68,7 @@ func TestFindUserBySubNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	record, err := database.FindUserBySub("nonexistent-sub")
 	if err != nil {
@@ -84,7 +84,7 @@ func TestInsertDuplicateUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	err = database.InsertUser("sub-dup", "Alice", "alice@example.com", "user123", "abcd1234")
 	if err != nil {
@@ -107,7 +107,7 @@ func TestIsHealthy(t *testing.T) {
 		t.Error("IsHealthy() = false, want true for open database")
 	}
 
-	database.Close()
+	_ = database.Close()
 
 	if database.IsHealthy() {
 		t.Error("IsHealthy() = true, want false for closed database")
@@ -119,7 +119,7 @@ func TestDeleteUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	// Insert a user first.
 	err = database.InsertUser("sub-del", "Delete Me", "delete@example.com", "user-del-1", "pass1234")
@@ -157,7 +157,7 @@ func TestDeleteUser_NonExistent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	// Deleting a non-existent user should not error (DELETE WHERE is a no-op).
 	err = database.DeleteUser("ghost-sub")
@@ -171,7 +171,7 @@ func TestUpdatePictureURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	// Insert a user.
 	err = database.InsertUser("sub-pic", "Pic User", "pic@example.com", "user-pic-1", "picpass")
@@ -215,7 +215,7 @@ func TestUpdatePictureURL_OverwritesPrevious(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	err = database.InsertUser("sub-pic2", "Pic2", "pic2@example.com", "user-pic-2", "picpass2")
 	if err != nil {
@@ -248,7 +248,7 @@ func TestUpdateUserIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	err = database.InsertUser("sub-identity", "Old Name", "old@example.com", "user-id-1", "pass123")
 	if err != nil {

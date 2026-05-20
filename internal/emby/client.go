@@ -65,7 +65,7 @@ func (c *Client) FindUserByName(ctx context.Context, name string) (*User, error)
 	if err != nil {
 		return nil, fmt.Errorf("emby: find user request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := checkResponse(resp); err != nil {
 		return nil, fmt.Errorf("emby: find user: %w", err)
@@ -113,7 +113,7 @@ func (c *Client) CreateUser(ctx context.Context, name, copyFromUserID string) (*
 	if err != nil {
 		return nil, fmt.Errorf("emby: create user request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := checkResponse(resp); err != nil {
 		return nil, fmt.Errorf("emby: create user: %w", err)
@@ -153,7 +153,7 @@ func (c *Client) AuthenticateByName(ctx context.Context, username, password stri
 	if err != nil {
 		return nil, fmt.Errorf("emby: authenticate request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := checkResponse(resp); err != nil {
 		return nil, fmt.Errorf("emby: authenticate: %w", err)
@@ -197,7 +197,7 @@ func (c *Client) UpdatePassword(ctx context.Context, userID, newPassword string)
 	if err != nil {
 		return fmt.Errorf("emby: reset password request: %w", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if err := checkResponse(resp); err != nil {
 		return fmt.Errorf("emby: reset password: %w", err)
@@ -224,7 +224,7 @@ func (c *Client) UpdatePassword(ctx context.Context, userID, newPassword string)
 	if err != nil {
 		return fmt.Errorf("emby: set password request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := checkResponse(resp); err != nil {
 		return fmt.Errorf("emby: set password: %w", err)
@@ -247,7 +247,7 @@ func (c *Client) GetUserPolicy(ctx context.Context, userID string) ([]byte, erro
 	if err != nil {
 		return nil, fmt.Errorf("emby: get user request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := checkResponse(resp); err != nil {
 		return nil, fmt.Errorf("emby: get user: %w", err)
@@ -278,7 +278,7 @@ func (c *Client) UpdatePolicyRaw(ctx context.Context, userID string, policyJSON 
 	if err != nil {
 		return fmt.Errorf("emby: update policy request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := checkResponse(resp); err != nil {
 		return fmt.Errorf("emby: update policy: %w", err)
@@ -312,7 +312,7 @@ func (c *Client) UpdatePolicy(ctx context.Context, userID string, policy *UserPo
 	if err != nil {
 		return fmt.Errorf("emby: update policy request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := checkResponse(resp); err != nil {
 		return fmt.Errorf("emby: update policy: %w", err)
@@ -333,7 +333,7 @@ func (c *Client) SetProfileImage(ctx context.Context, userID string, imageURL st
 	if err != nil {
 		return fmt.Errorf("emby: fetch image: %w", err)
 	}
-	defer imgResp.Body.Close()
+	defer func() { _ = imgResp.Body.Close() }()
 
 	if imgResp.StatusCode != http.StatusOK {
 		return fmt.Errorf("emby: fetch image: unexpected status %d", imgResp.StatusCode)
@@ -358,7 +358,7 @@ func (c *Client) SetProfileImage(ctx context.Context, userID string, imageURL st
 	if err != nil {
 		return fmt.Errorf("emby: set image request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := checkResponse(resp); err != nil {
 		return fmt.Errorf("emby: set image: %w", err)
@@ -387,7 +387,7 @@ func (c *Client) UpdateUserName(ctx context.Context, userID, newName string) err
 	if err != nil {
 		return fmt.Errorf("emby: update user name request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := checkResponse(resp); err != nil {
 		return fmt.Errorf("emby: update user name: %w", err)
@@ -409,7 +409,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("emby: ping request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if err := checkResponse(resp); err != nil {
 		return fmt.Errorf("emby: ping: %w", err)

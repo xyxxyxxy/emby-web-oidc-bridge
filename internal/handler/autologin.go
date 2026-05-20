@@ -163,7 +163,7 @@ func InjectCredentials(embyURL string) http.HandlerFunc {
 			http.Error(w, "Bad Gateway", http.StatusBadGateway)
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
@@ -185,7 +185,7 @@ func InjectCredentials(embyURL string) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Write([]byte(html))
+		_, _ = w.Write([]byte(html))
 	}
 }
 
