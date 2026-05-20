@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/config"
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/db"
@@ -44,13 +45,22 @@ func main() {
 	// Create Emby client.
 	embyClient := emby.NewClient(cfg.EmbyAPIURL, cfg.EmbyAPIKey)
 
-	// Validate template user exists in Emby at startup.
-	templateUser, err := embyClient.FindUserByName(context.Background(), cfg.TemplateUserName)
-	if err != nil {
-		log.Fatalf("failed to look up template user %q in Emby: %v", cfg.TemplateUserName, err)
-	}
-	if templateUser == nil {
-		log.Fatalf("template user %q not found in Emby", cfg.TemplateUserName)
+	// Wait for Emby to become available and validate template user.
+	var templateUser *emby.User
+	for {
+		var err error
+		templateUser, err = embyClient.FindUserByName(context.Background(), cfg.TemplateUserName)
+		if err != nil {
+			slog.Warn("waiting for Emby to become available",
+				"error", err,
+			)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		if templateUser == nil {
+			log.Fatalf("template user %q not found in Emby", cfg.TemplateUserName)
+		}
+		break
 	}
 	slog.Info("template user validated",
 		"template_user_name", cfg.TemplateUserName,
