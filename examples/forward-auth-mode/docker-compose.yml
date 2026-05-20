@@ -1,5 +1,5 @@
 # Forward auth mode: Caddy authenticates via oauth2-proxy subrequest, then forwards to bridge.
-# Note: Profile image sync is NOT available in this mode.
+# Profile image sync works via JWT ID token extraction (set_authorization_header in oauth2-proxy).
 #
 # Flow: Browser → Caddy → (auth check: oauth2-proxy) → bridge → Emby
 
@@ -37,6 +37,8 @@ services:
       TEMPLATE_USER_NAME: template
       # Allow requests from Caddy's container IP range
       TRUSTED_PROXIES: "172.18.0.0/16"
+      # OIDC issuer URL (enables profile image sync via userinfo or JWT)
+      OIDC_ISSUER_URL: https://your-oidc-issuer.example.com
       # Port the bridge listens on (default: 8080)
       # BRIDGE_PORT: 8080
       # Path to the SQLite database file

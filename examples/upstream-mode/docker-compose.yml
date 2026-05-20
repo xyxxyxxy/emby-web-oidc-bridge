@@ -27,6 +27,8 @@ services:
       TEMPLATE_USER_NAME: template
       # Allow requests from oauth2-proxy's container IP range
       TRUSTED_PROXIES: "172.18.0.0/16"
+      # OIDC issuer URL (enables profile image sync via userinfo)
+      OIDC_ISSUER_URL: https://your-oidc-issuer.example.com
       # Port the bridge listens on (default: 8080)
       # BRIDGE_PORT: 8080
       # Path to the SQLite database file

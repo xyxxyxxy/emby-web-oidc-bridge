@@ -25,7 +25,7 @@ Users are automatically provisioned on first login with settings copied from a c
 - Automatic user provisioning from OIDC identity
 - Seamless web login (no username/password entry)
 - Template-based user creation (inherit permissions from a configured user)
-- Profile image sync from OIDC claims (upstream mode only, see [Profile Image Sync](#profile-image-sync))
+- Profile image sync from OIDC claims (both modes, see [Profile Image Sync](#profile-image-sync))
 - Account page showing credentials for TV/mobile apps
 - Health check endpoint (`/health`)
 - Trusted proxy IP validation
@@ -93,6 +93,7 @@ volumes:
 | `TRUSTED_PROXIES` | Yes | — | Comma-separated IPs/CIDRs allowed to set forwarded headers |
 | `BRIDGE_PORT` | No | `8080` | Port the bridge listens on |
 | `DATABASE_PATH` | No | `/data/users.db` | Path to the SQLite database file |
+| `OIDC_ISSUER_URL` | No | — | OIDC issuer URL (enables profile image sync via userinfo/JWT) |
 
 ## oauth2-proxy Configuration
 
@@ -131,9 +132,10 @@ Browser → Caddy → (auth check: oauth2-proxy) → bridge → Emby
 
 ```ini
 set_xauthrequest = true
+set_authorization_header = true
 ```
 
-This makes oauth2-proxy return `X-Auth-Request-Email` and `X-Auth-Request-User` in the `/oauth2/auth` response headers.
+This makes oauth2-proxy return `X-Auth-Request-Email`, `X-Auth-Request-User`, and the ID token as `Authorization` header in the `/oauth2/auth` response.
 
 **Caddy example:**
 
@@ -146,7 +148,7 @@ emby.example.com {
     handle {
         forward_auth oauth2-proxy:4180 {
             uri /oauth2/auth
-            copy_headers X-Auth-Request-User X-Auth-Request-Email
+            copy_headers X-Auth-Request-User X-Auth-Request-Email Authorization
 
             @error status 401
             handle_response @error {
@@ -174,13 +176,17 @@ The first non-empty value wins for each header.
 
 ### Profile Image Sync
 
-The bridge syncs the user's OIDC profile picture to Emby on every login. This requires the picture URL to be forwarded as a header.
+The bridge syncs the user's OIDC profile picture to Emby on every login. It tries multiple methods in order:
 
-**Option A (upstream mode):** Works automatically with `pass_user_headers = true` — oauth2-proxy sets `X-Forwarded-Picture`.
+1. `X-Forwarded-Picture` / `X-Auth-Request-Picture` headers (if forwarded by proxy)
+2. OIDC userinfo endpoint (if `OIDC_ISSUER_URL` is set and an access token is forwarded)
+3. JWT ID token decoding (if `Authorization: Bearer <id_token>` header is present)
 
-**Option B (forward_auth mode):** oauth2-proxy's `set_xauthrequest = true` does **not** include the picture claim in the auth response. Profile image sync is **not available** in forward_auth mode unless your reverse proxy can extract the picture claim from the ID token separately.
+**Option A (upstream mode):** Set `pass_user_headers = true` and `OIDC_ISSUER_URL`. Works via method 1 or 2.
 
-If profile image sync is important to you, use Option A (upstream mode).
+**Option B (forward_auth mode):** Set `set_authorization_header = true` in oauth2-proxy, copy the `Authorization` header in Caddy, and set `OIDC_ISSUER_URL`. Works via method 3 (JWT decoding).
+
+Both modes support profile image sync when configured correctly. Your OIDC provider must include the `picture` claim in the ID token (add `profile` scope if needed).
 
 ## Architecture
 
