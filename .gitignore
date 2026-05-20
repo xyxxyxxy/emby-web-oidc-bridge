@@ -17,9 +17,6 @@ data/
 .idea/
 .vscode/
 
-# Docker Compose (local dev only)
-docker-compose.yml
-
 # OS files
 .DS_Store
 Thumbs.db
