@@ -455,18 +455,30 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 			}
 
-			// Non-blocking: apply template policy with overrides.
+			// Non-blocking: enforce IsDisabled=false and EnableUserPreferenceAccess=false
+			// on the user's current policy (preserves admin-configured settings).
 			go func() {
-				policyJSON, polBuildErr := buildUserPolicy(templatePolicy)
-				if polBuildErr != nil {
-					slog.Warn("failed to build user policy",
+				currentPolicy, fetchErr := embyClient.GetUserPolicy(context.Background(), embyUserID)
+				if fetchErr != nil {
+					slog.Warn("failed to fetch current user policy",
 						"email", headers.Email,
-						"error", polBuildErr,
+						"emby_user_id", embyUserID,
+						"error", fetchErr,
 					)
 					return
 				}
-				if err := embyClient.UpdatePolicyRaw(context.Background(), embyUserID, policyJSON); err != nil {
-					slog.Warn("failed to update user policy",
+				var policy map[string]interface{}
+				if json.Unmarshal(currentPolicy, &policy) != nil {
+					return
+				}
+				policy["IsDisabled"] = false
+				policy["EnableUserPreferenceAccess"] = false
+				updatedPolicy, marshalErr := json.Marshal(policy)
+				if marshalErr != nil {
+					return
+				}
+				if err := embyClient.UpdatePolicyRaw(context.Background(), embyUserID, updatedPolicy); err != nil {
+					slog.Warn("failed to enforce user policy",
 						"email", headers.Email,
 						"emby_user_id", embyUserID,
 						"error", err,

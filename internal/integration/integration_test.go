@@ -119,6 +119,20 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusNoContent)
 
+		case r.Method == http.MethodGet && r.URL.Path == "/Users/created-user-001":
+			// GetUserPolicy: return user with Policy field.
+			resp := map[string]interface{}{
+				"Id":   "created-user-001",
+				"Name": "newuser@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/AuthenticateByName":
 			resp := map[string]interface{}{
 				"AccessToken": "new-user-token-xyz",
@@ -267,6 +281,20 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 			// Non-blocking policy update.
 			w.WriteHeader(http.StatusNoContent)
 
+		case r.Method == http.MethodGet && r.URL.Path == "/Users/emby-user-100":
+			// GetUserPolicy: return user with Policy field.
+			resp := map[string]interface{}{
+				"Id":   "emby-user-100",
+				"Name": "existing@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+
 		default:
 			t.Errorf("unexpected API call: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -361,6 +389,20 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/adopted-emby-555/Policy":
 			// Non-blocking policy update.
 			w.WriteHeader(http.StatusNoContent)
+
+		case r.Method == http.MethodGet && r.URL.Path == "/Users/adopted-emby-555":
+			// GetUserPolicy: return user with Policy field.
+			resp := map[string]interface{}{
+				"Id":   "adopted-emby-555",
+				"Name": "adopted@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
 
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/AuthenticateByName":
 			resp := map[string]interface{}{
@@ -482,6 +524,18 @@ func TestIntegration_RequestBodyPreserved(t *testing.T) {
 			json.NewEncoder(w).Encode(resp)
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/emby-body-user/Policy":
 			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/Users/emby-body-user":
+			resp := map[string]interface{}{
+				"Id":   "emby-body-user",
+				"Name": "body@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
 		default:
 			w.WriteHeader(http.StatusOK)
 		}
@@ -552,6 +606,18 @@ func TestIntegration_AuthTokenForwardedToProxy(t *testing.T) {
 			json.NewEncoder(w).Encode(resp)
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/emby-token-user/Policy":
 			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/Users/emby-token-user":
+			resp := map[string]interface{}{
+				"Id":   "emby-token-user",
+				"Name": "token@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
 		default:
 			w.WriteHeader(http.StatusOK)
 		}

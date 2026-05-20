@@ -38,8 +38,6 @@ Users are automatically provisioned on first login with settings copied from a c
 - The generated password is not security-critical — it exists solely for TV/mobile app authentication where OAuth flows aren't supported
 - Passwords are 8 lowercase alphanumeric characters, optimized for easy entry on TV remotes
 - Passwords are stored in plaintext in SQLite (by design — they're not secrets)
-- The container runs as non-root on a distroless base image (no shell)
-- Read-only filesystem and no-new-privileges recommended in production
 
 ## Policy Management
 
@@ -52,7 +50,7 @@ The bridge manages user access through the OIDC provider, not through Emby's bui
 
 All other policy fields (library access, parental controls, `IsHidden`, remote access, etc.) are inherited from the template user and preserved as-is.
 
-**Important:** If you disable a user in Emby's admin UI, the bridge will re-enable them on their next login. To revoke access, remove the user from your OIDC provider or oauth2-proxy's allowed list instead.
+**Important:** If you disable a user in Emby's admin UI, the bridge will re-enable them on their next login. To revoke access, remove the user from your OIDC provider.
 
 ## Quick Start
 

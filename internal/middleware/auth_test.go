@@ -132,6 +132,20 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 		mux.HandleFunc("/Users/user-123/Policy", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		})
+		// GetUserPolicy (non-blocking goroutine).
+		mux.HandleFunc("/Users/user-123", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "user-123",
+				"Name": "alice@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
 	})
 	defer srv.Close()
 
@@ -213,6 +227,20 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 		mux.HandleFunc("/Users/new-user-456/Policy", func(w http.ResponseWriter, r *http.Request) {
 			policyCalled = true
 			w.WriteHeader(http.StatusNoContent)
+		})
+		// GetUserPolicy (non-blocking goroutine).
+		mux.HandleFunc("/Users/new-user-456", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "new-user-456",
+				"Name": "newuser@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
 		})
 		// AuthenticateByName.
 		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
@@ -302,6 +330,20 @@ func TestAuth_AdoptedUser(t *testing.T) {
 		// Policy update (non-blocking goroutine).
 		mux.HandleFunc("/Users/existing-emby-789/Policy", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
+		})
+		// GetUserPolicy (non-blocking goroutine).
+		mux.HandleFunc("/Users/existing-emby-789", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "existing-emby-789",
+				"Name": "adopted@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
 		})
 		// AuthenticateByName.
 		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
@@ -454,6 +496,19 @@ func TestAuth_AuthTokenInContext(t *testing.T) {
 		mux.HandleFunc("/Users/user-ctx/Policy", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		})
+		mux.HandleFunc("/Users/user-ctx", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "user-ctx",
+				"Name": "context@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
 	})
 	defer srv.Close()
 
@@ -508,6 +563,19 @@ func TestAuth_MissingOptionalHeaders(t *testing.T) {
 		})
 		mux.HandleFunc("/Users/user-opt/Policy", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/user-opt", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "user-opt",
+				"Name": "nooptional@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
 		})
 	})
 	defer srv.Close()
@@ -700,6 +768,19 @@ func TestAuth_XAuthRequestEmailFallback(t *testing.T) {
 		mux.HandleFunc("/Users/user-fb/Policy", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		})
+		mux.HandleFunc("/Users/user-fb", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "user-fb",
+				"Name": "fallback@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		})
 	})
 	defer srv.Close()
 
@@ -751,6 +832,19 @@ func TestAuth_XAuthRequestUserFallback(t *testing.T) {
 		})
 		mux.HandleFunc("/Users/user-ufb/Policy", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/user-ufb", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "user-ufb",
+				"Name": "userfb@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
 		})
 	})
 	defer srv.Close()
@@ -806,6 +900,19 @@ func TestAuth_XAuthRequestPictureFallback(t *testing.T) {
 		})
 		mux.HandleFunc("/Users/pic-user-1/Policy", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/pic-user-1", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "pic-user-1",
+				"Name": "picfb@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{
@@ -873,6 +980,19 @@ func TestAuth_JWTPictureExtraction(t *testing.T) {
 		})
 		mux.HandleFunc("/Users/jwt-user-1/Policy", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/jwt-user-1", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "jwt-user-1",
+				"Name": "jwt@example.com",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{

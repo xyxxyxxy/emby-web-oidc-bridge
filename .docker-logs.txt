@@ -1,0 +1,14 @@
+2026/05/20 09:55:03 ERROR emby user lookup failed email=unreachable@example.com error="emby: find user request: Get \"http://127.0.0.1:38681/Users/Query?api_key=test-api-key\": dial tcp 127.0.0.1:38681: connect: connection refused"
+2026/05/20 09:55:03 INFO processing authentication email=failcreate@example.com picture_url=""
+2026/05/20 09:55:03 INFO provisioning new user email=failcreate@example.com
+2026/05/20 09:55:03 ERROR failed to create user in Emby email=failcreate@example.com error="emby: create user: emby API error: status 500: Internal Server Error"
+2026/05/20 09:55:03 WARN failed to fetch current user policy email=newuser@example.com emby_user_id=created-user-001 error="emby: get user: emby API error: status 404: Not Found"
+2026/05/20 09:55:03 WARN failed to fetch current user policy email=existing@example.com emby_user_id=emby-user-100 error="emby: get user: emby API error: status 404: Not Found"
+--- FAIL: TestIntegration_ExistingUserLoginFlow (0.01s)
+2026/05/20 09:55:03 WARN failed to fetch current user policy email=adopted@example.com emby_user_id=adopted-emby-555 error="emby: get user: emby API error: status 404: Not Found"
+--- FAIL: TestIntegration_AdoptedUserFlow (0.01s)
+2026/05/20 09:55:03 WARN failed to fetch current user policy email=body@example.com emby_user_id=emby-body-user error="emby: decode user response: EOF"
+2026/05/20 09:55:03 WARN failed to fetch current user policy email=token@example.com emby_user_id=emby-token-user error="emby: decode user response: EOF"
+FAIL
+FAIL	github.com/xyxxyxxy/emby-web-oidc-bridge/internal/integration	0.072s
+FAIL
