@@ -54,7 +54,7 @@ func buildUserPolicy(templatePolicy []byte) ([]byte, error) {
 }
 
 // extractClaimsFromJWT decodes the payload of a JWT token (without signature verification)
-// and extracts the "sub", "name", "email", and "picture" claims.
+// and extracts the "sub", "name", "preferred_username", "email", and "picture" claims.
 // Signature verification is not needed because the token was already validated by oauth2-proxy.
 func extractClaimsFromJWT(token string) (sub, name, email, picture string) {
 	parts := strings.Split(token, ".")
@@ -74,15 +74,21 @@ func extractClaimsFromJWT(token string) (sub, name, email, picture string) {
 		return
 	}
 	var claims struct {
-		Sub     string `json:"sub"`
-		Name    string `json:"name"`
-		Email   string `json:"email"`
-		Picture string `json:"picture"`
+		Sub               string `json:"sub"`
+		Name              string `json:"name"`
+		PreferredUsername string `json:"preferred_username"`
+		Email             string `json:"email"`
+		Picture           string `json:"picture"`
 	}
 	if json.Unmarshal(decoded, &claims) != nil {
 		return
 	}
-	return claims.Sub, claims.Name, claims.Email, claims.Picture
+	// Prefer "name" over "preferred_username" for display name.
+	displayName := claims.Name
+	if displayName == "" {
+		displayName = claims.PreferredUsername
+	}
+	return claims.Sub, displayName, claims.Email, claims.Picture
 }
 
 // AuthTokenFromContext retrieves the Emby auth token from the request context.
@@ -122,10 +128,6 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			if email == "" {
 				email = r.Header.Get("X-Auth-Request-Email")
 			}
-			displayName := r.Header.Get("X-Forwarded-User")
-			if displayName == "" {
-				displayName = r.Header.Get("X-Auth-Request-User")
-			}
 			pictureURL := r.Header.Get("X-Forwarded-Picture")
 			if pictureURL == "" {
 				pictureURL = r.Header.Get("X-Auth-Request-Picture")
@@ -154,18 +156,39 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				jwtSub, jwtName, jwtEmail, jwtPicture = extractClaimsFromJWT(idToken)
 			}
 
+			// Display name: prefer JWT "name" claim over X-Forwarded-User header.
+			// oauth2-proxy sets X-Forwarded-User to the "user" claim which defaults
+			// to "sub" (a UUID), not the human-readable display name. The JWT "name"
+			// claim is the actual display name from the OIDC provider.
+			displayName := jwtName
+			if displayName == "" {
+				displayName = r.Header.Get("X-Forwarded-Preferred-Username")
+				if displayName == "" {
+					displayName = r.Header.Get("X-Auth-Request-Preferred-Username")
+				}
+			}
+			if displayName == "" {
+				displayName = r.Header.Get("X-Forwarded-User")
+				if displayName == "" {
+					displayName = r.Header.Get("X-Auth-Request-User")
+				}
+			}
+
 			// Fill in missing values from JWT claims.
 			if sub == "" {
 				sub = jwtSub
-			}
-			if displayName == "" {
-				displayName = jwtName
 			}
 			if email == "" {
 				email = jwtEmail
 			}
 			if pictureURL == "" && jwtPicture != "" {
 				pictureURL = jwtPicture
+			}
+
+			// If displayName equals sub, it's likely oauth2-proxy sending the sub
+			// as X-Forwarded-User — don't use it as a display name.
+			if displayName == sub {
+				displayName = ""
 			}
 
 			headers := OIDCHeaders{
