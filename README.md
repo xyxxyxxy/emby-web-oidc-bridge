@@ -2,6 +2,8 @@
 
 A lightweight Go service that enables OIDC single sign-on for Emby's web interface via [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/).
 
+> ⚠️ **Beta** — this project is functional but under active development.
+
 ## Motivation
 
 Emby doesn't support SSO or OpenID Connect natively, and the [feature request](https://emby.media/community/topic/114493-sso-openid/) doesn't look like it's going anywhere soon. Since a full SSO solution across all Emby clients (TV apps, mobile, etc.) is non-trivial, this bridge takes a pragmatic approach: it enables OIDC authentication for the web interface, and provides generated credentials for TV/mobile apps where OAuth flows aren't supported.
@@ -29,31 +31,59 @@ Users are automatically provisioned on first login with settings copied from a c
 - Trusted proxy IP validation
 - Single static binary (~10MB Docker image)
 
+## Security Model
+
+- Emby is expected to be hosted behind oauth2-proxy (or a VPN for direct access)
+- The bridge only accepts forwarded headers from IPs in the `TRUSTED_PROXIES` list
+- The generated password is not security-critical — it exists solely for TV/mobile app authentication where OAuth flows aren't supported
+- Passwords are 8 lowercase alphanumeric characters, optimized for easy entry on TV remotes
+- Passwords are stored in plaintext in SQLite (by design — they're not secrets)
+- The container runs as non-root on a distroless base image (no shell)
+- Read-only filesystem and no-new-privileges recommended in production
+
+## Policy Management
+
+The bridge manages user access through the OIDC provider, not through Emby's built-in user management. On every login, the bridge applies the template user's policy with the following overrides:
+
+| Policy Field | Value | Reason |
+|-------------|-------|--------|
+| `IsDisabled` | `false` | Access is managed via the OIDC provider. If a user can authenticate through oauth2-proxy, they should have access. Revoke access at the identity provider, not in Emby. |
+| `EnableUserPreferenceAccess` | `false` | Prevents users from changing their password or profile image in Emby, since these are managed by the bridge and OIDC provider. |
+
+All other policy fields (library access, parental controls, `IsHidden`, remote access, etc.) are inherited from the template user and preserved as-is.
+
+**Important:** If you disable a user in Emby's admin UI, the bridge will re-enable them on their next login. To revoke access, remove the user from your OIDC provider or oauth2-proxy's allowed list instead.
+
 ## Quick Start
 
-### Docker Compose
+Full example configurations with docker-compose, oauth2-proxy config, and setup instructions are available in the [`examples/`](examples/) folder:
+
+- **[`examples/upstream-mode/`](examples/upstream-mode/)** — Recommended. oauth2-proxy forwards directly to the bridge. Enables profile image sync.
+- **[`examples/forward-auth-mode/`](examples/forward-auth-mode/)** — Caddy/Nginx forward_auth pattern. No profile image sync.
+
+Minimal standalone configuration:
 
 ```yaml
 services:
   emby-bridge:
-    image: emby-web-oidc-bridge:latest
+    image: ghcr.io/xyxxyxxy/emby-web-oidc-bridge:latest
     environment:
       EMBY_API_URL: http://emby:8096/emby
       EMBY_API_KEY: your-emby-api-key
       TEMPLATE_USER_NAME: template
-      TRUSTED_PROXIES: 172.16.0.0/12
-      # BRIDGE_PORT: 8080        # optional, default: 8080
-      # DATABASE_PATH: /data/users.db  # optional, default: ./data/users.db
+      TRUSTED_PROXIES: "172.18.0.0/16"
+      DATABASE_PATH: /data/users.db
     volumes:
       - bridge-data:/data
-    ports:
-      - "8080:8080"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   bridge-data:
 ```
 
-### Environment Variables
+## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -64,19 +94,13 @@ volumes:
 | `BRIDGE_PORT` | No | `8080` | Port the bridge listens on |
 | `DATABASE_PATH` | No | `/data/users.db` | Path to the SQLite database file |
 
-### Prerequisites
-
-1. A running Emby server with an API key
-2. A template user configured in Emby with the desired default permissions
-3. oauth2-proxy (or similar) configured to forward email headers (see [oauth2-proxy Configuration](#oauth2-proxy-configuration))
-
 ## oauth2-proxy Configuration
 
 The bridge accepts user identity from either `X-Forwarded-Email` or `X-Auth-Request-Email` headers. How these get set depends on your deployment topology.
 
-### Option A: oauth2-proxy as upstream forwarder (simpler)
+### Option A: Upstream mode (recommended)
 
-In this setup, oauth2-proxy handles auth and forwards requests directly to the bridge. No separate reverse proxy needed between oauth2-proxy and the bridge.
+oauth2-proxy handles auth and forwards requests directly to the bridge. No separate reverse proxy needed between oauth2-proxy and the bridge.
 
 ```
 Browser → Reverse Proxy → oauth2-proxy → bridge → Emby
@@ -89,13 +113,15 @@ upstreams = ["http://emby-bridge:8080"]
 pass_user_headers = true
 ```
 
-`pass_user_headers = true` makes oauth2-proxy set `X-Forwarded-Email`, `X-Forwarded-User`, and `X-Forwarded-Groups` on requests forwarded to the upstream.
+`pass_user_headers = true` makes oauth2-proxy set `X-Forwarded-Email`, `X-Forwarded-User`, and `X-Forwarded-Picture` on requests forwarded to the upstream.
 
-Set `TRUSTED_PROXIES` in the bridge to the IP that oauth2-proxy connects from.
+Set `TRUSTED_PROXIES` in the bridge to the IP/subnet that oauth2-proxy connects from.
 
-### Option B: Reverse proxy with forward_auth subrequest (Caddy, Nginx, Traefik)
+See [`examples/upstream-mode/`](examples/upstream-mode/) for a complete setup.
 
-In this setup, your reverse proxy handles routing and uses oauth2-proxy only for auth decisions via a subrequest. The reverse proxy then forwards the request to the bridge with the identity headers copied from the auth response.
+### Option B: Forward auth mode (Caddy, Nginx, Traefik)
+
+Your reverse proxy handles routing and uses oauth2-proxy only for auth decisions via a subrequest. The reverse proxy then forwards the request to the bridge with the identity headers copied from the auth response.
 
 ```
 Browser → Caddy → (auth check: oauth2-proxy) → bridge → Emby
@@ -104,7 +130,6 @@ Browser → Caddy → (auth check: oauth2-proxy) → bridge → Emby
 **oauth2-proxy config:**
 
 ```ini
-# Required for forward_auth/subrequest mode
 set_xauthrequest = true
 ```
 
@@ -114,19 +139,15 @@ This makes oauth2-proxy return `X-Auth-Request-Email` and `X-Auth-Request-User` 
 
 ```caddyfile
 emby.example.com {
-    # Handle oauth2-proxy callback routes
     handle /oauth2/* {
         reverse_proxy oauth2-proxy:4180
     }
 
-    # Auth check + forward to bridge
     handle {
         forward_auth oauth2-proxy:4180 {
             uri /oauth2/auth
-
-            # Copy identity headers from auth response to upstream request
             copy_headers X-Auth-Request-User X-Auth-Request-Email
-            
+
             @error status 401
             handle_response @error {
                 redir * /oauth2/sign_in?rd={scheme}://{host}{uri}
@@ -138,7 +159,9 @@ emby.example.com {
 }
 ```
 
-Set `TRUSTED_PROXIES` in the bridge to the IP that Caddy connects from.
+Set `TRUSTED_PROXIES` in the bridge to the IP/subnet that Caddy connects from.
+
+See [`examples/forward-auth-mode/`](examples/forward-auth-mode/) for a complete setup.
 
 ### Header Priority
 
@@ -155,7 +178,7 @@ The bridge syncs the user's OIDC profile picture to Emby on every login. This re
 
 **Option A (upstream mode):** Works automatically with `pass_user_headers = true` — oauth2-proxy sets `X-Forwarded-Picture`.
 
-**Option B (forward_auth mode):** oauth2-proxy's `set_xauthrequest = true` does **not** include the picture claim in the auth response. The `X-Auth-Request-Picture` header is not set. Profile image sync is **not available** in forward_auth mode unless your reverse proxy can extract the picture claim from the ID token separately.
+**Option B (forward_auth mode):** oauth2-proxy's `set_xauthrequest = true` does **not** include the picture claim in the auth response. Profile image sync is **not available** in forward_auth mode unless your reverse proxy can extract the picture claim from the ID token separately.
 
 If profile image sync is important to you, use Option A (upstream mode).
 
@@ -214,27 +237,6 @@ docker build -t emby-auth-bridge .
 ```
 
 See [AGENT.md](AGENT.md) for full development guidelines.
-
-## Security Model
-
-- Emby is expected to be hosted behind oauth2-proxy (or a VPN for direct access)
-- The generated password is not security-critical — it exists solely for TV/mobile app authentication where OAuth flows aren't supported
-- Passwords are 8 lowercase alphanumeric characters, optimized for easy entry on TV remotes
-- Passwords are stored in plaintext in SQLite (by design — they're not secrets)
-- The bridge only accepts forwarded headers from IPs in the `TRUSTED_PROXIES` list
-
-## Policy Management
-
-The bridge manages user access through the OIDC provider, not through Emby's built-in user management. On every login, the bridge applies the template user's policy with the following overrides:
-
-| Policy Field | Value | Reason |
-|-------------|-------|--------|
-| `IsDisabled` | `false` | Access is managed via the OIDC provider. If a user can authenticate through oauth2-proxy, they should have access. Revoke access at the identity provider, not in Emby. |
-| `EnableUserPreferenceAccess` | `false` | Prevents users from changing their password or profile image in Emby, since these are managed by the bridge and OIDC provider. |
-
-All other policy fields (library access, parental controls, `IsHidden`, remote access, etc.) are inherited from the template user and preserved as-is.
-
-**Important:** If you disable a user in Emby's admin UI, the bridge will re-enable them on their next login. To revoke access, remove the user from your OIDC provider or oauth2-proxy's allowed list instead.
 
 ## License
 

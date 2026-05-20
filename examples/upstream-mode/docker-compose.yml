@@ -1,0 +1,42 @@
+# Upstream mode: oauth2-proxy forwards directly to the bridge.
+# This is the recommended setup — it enables profile image sync from OIDC claims.
+#
+# Flow: Browser → Reverse Proxy → oauth2-proxy → bridge → Emby
+
+services:
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    command:
+      - --config=/etc/oauth2-proxy/oauth2-proxy.cfg
+    volumes:
+      - ./oauth2-proxy.cfg:/etc/oauth2-proxy/oauth2-proxy.cfg:ro
+    ports:
+      - "4180:4180"
+    depends_on:
+      - emby-bridge
+    restart: unless-stopped
+
+  emby-bridge:
+    image: ghcr.io/xyxxyxxy/emby-web-oidc-bridge:latest
+    environment:
+      # URL of your Emby server's API endpoint
+      EMBY_API_URL: http://emby:8096/emby
+      # Admin API key from Emby (Dashboard → API Keys)
+      EMBY_API_KEY: your-emby-api-key
+      # Name of the Emby user whose settings are copied to new users
+      TEMPLATE_USER_NAME: template
+      # Allow requests from oauth2-proxy's container IP range
+      TRUSTED_PROXIES: "172.18.0.0/16"
+      # Port the bridge listens on (default: 8080)
+      # BRIDGE_PORT: 8080
+      # Path to the SQLite database file
+      DATABASE_PATH: /data/users.db
+    volumes:
+      - bridge-data:/data
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  bridge-data:
