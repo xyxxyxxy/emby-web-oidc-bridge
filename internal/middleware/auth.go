@@ -54,9 +54,9 @@ func buildUserPolicy(templatePolicy []byte) ([]byte, error) {
 }
 
 // extractClaimsFromJWT decodes the payload of a JWT token (without signature verification)
-// and extracts the "sub", "name", "preferred_username", "email", and "picture" claims.
+// and extracts the "sub", "preferred_username", "name", "email", and "picture" claims.
 // Signature verification is not needed because the token was already validated by oauth2-proxy.
-func extractClaimsFromJWT(token string) (sub, name, email, picture string) {
+func extractClaimsFromJWT(token string) (sub, preferredUsername, name, email, picture string) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return
@@ -83,12 +83,7 @@ func extractClaimsFromJWT(token string) (sub, name, email, picture string) {
 	if json.Unmarshal(decoded, &claims) != nil {
 		return
 	}
-	// Prefer "name" over "preferred_username" for display name.
-	displayName := claims.Name
-	if displayName == "" {
-		displayName = claims.PreferredUsername
-	}
-	return claims.Sub, displayName, claims.Email, claims.Picture
+	return claims.Sub, claims.PreferredUsername, claims.Name, claims.Email, claims.Picture
 }
 
 // AuthTokenFromContext retrieves the Emby auth token from the request context.
@@ -99,18 +94,47 @@ func AuthTokenFromContext(ctx context.Context) string {
 
 // OIDCHeaders holds extracted OIDC session headers.
 type OIDCHeaders struct {
-	Sub         string
-	Name        string
-	Email       string
-	PictureURL  string
+	Sub               string
+	PreferredUsername string
+	Name              string
+	Email             string
+	PictureURL        string
 }
 
-// embyUsername returns the preferred Emby username: name > email.
+// usernameCandiates returns the ordered list of candidate Emby usernames:
+// preferred_username > name > email.
+func (h *OIDCHeaders) usernameCandidates() []string {
+	var candidates []string
+	if h.PreferredUsername != "" {
+		candidates = append(candidates, h.PreferredUsername)
+	}
+	if h.Name != "" && h.Name != h.PreferredUsername {
+		candidates = append(candidates, h.Name)
+	}
+	if h.Email != "" && h.Email != h.PreferredUsername && h.Email != h.Name {
+		candidates = append(candidates, h.Email)
+	}
+	return candidates
+}
+
+// embyUsername returns the first candidate username (preferred_username > name > email).
 func (h *OIDCHeaders) embyUsername() string {
+	if h.PreferredUsername != "" {
+		return h.PreferredUsername
+	}
 	if h.Name != "" {
 		return h.Name
 	}
 	return h.Email
+}
+
+// displayName returns the best display name for logging/DB storage.
+// This is preferred_username > name (whichever is set first).
+func (h *OIDCHeaders) displayName() string {
+	if h.PreferredUsername != "" {
+		return h.PreferredUsername
+	}
+	return h.Name
 }
 
 // Auth returns middleware that extracts headers, provisions users, and authenticates with Emby.
@@ -140,7 +164,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			}
 
 			// Try to extract claims from the JWT ID token.
-			var jwtSub, jwtName, jwtEmail, jwtPicture string
+			var jwtSub, jwtPreferredUsername, jwtName, jwtEmail, jwtPicture string
 			idToken := ""
 			authHeader := r.Header.Get("Authorization")
 			if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
@@ -153,20 +177,22 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 			}
 			if idToken != "" {
-				jwtSub, jwtName, jwtEmail, jwtPicture = extractClaimsFromJWT(idToken)
+				jwtSub, jwtPreferredUsername, jwtName, jwtEmail, jwtPicture = extractClaimsFromJWT(idToken)
 			}
 
-			// Display name: prefer JWT "name" claim over X-Forwarded-User header.
-			// oauth2-proxy sets X-Forwarded-User to the "user" claim which defaults
-			// to "sub" (a UUID), not the human-readable display name. The JWT "name"
-			// claim is the actual display name from the OIDC provider.
-			displayName := jwtName
-			if displayName == "" {
-				displayName = r.Header.Get("X-Forwarded-Preferred-Username")
-				if displayName == "" {
-					displayName = r.Header.Get("X-Auth-Request-Preferred-Username")
-				}
+			// Preferred username: from headers or JWT.
+			preferredUsername := r.Header.Get("X-Forwarded-Preferred-Username")
+			if preferredUsername == "" {
+				preferredUsername = r.Header.Get("X-Auth-Request-Preferred-Username")
 			}
+			if preferredUsername == "" {
+				preferredUsername = jwtPreferredUsername
+			}
+
+			// Display name: from JWT "name" claim or X-Forwarded-User header.
+			// oauth2-proxy sets X-Forwarded-User to the "user" claim which defaults
+			// to "sub" (a UUID), not the human-readable display name.
+			displayName := jwtName
 			if displayName == "" {
 				displayName = r.Header.Get("X-Forwarded-User")
 				if displayName == "" {
@@ -190,12 +216,17 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			if displayName == sub {
 				displayName = ""
 			}
+			// Same for preferredUsername — shouldn't be the sub.
+			if preferredUsername == sub {
+				preferredUsername = ""
+			}
 
 			headers := OIDCHeaders{
-				Sub:        sub,
-				Name:       displayName,
-				Email:      email,
-				PictureURL: pictureURL,
+				Sub:               sub,
+				PreferredUsername: preferredUsername,
+				Name:              displayName,
+				Email:             email,
+				PictureURL:        pictureURL,
 			}
 
 			// Sub is required — it's the stable user identifier.
@@ -291,11 +322,11 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				if oldEmbyUsername == "" {
 					oldEmbyUsername = record.Email
 				}
-				nameChanged := headers.Name != record.Name || headers.Email != record.Email
+				nameChanged := headers.displayName() != record.Name || headers.Email != record.Email
 
 				if nameChanged {
 					// Update the bridge DB with new name/email.
-					if err := database.UpdateUserIdentity(headers.Sub, headers.Name, headers.Email); err != nil {
+					if err := database.UpdateUserIdentity(headers.Sub, headers.displayName(), headers.Email); err != nil {
 						slog.Error("failed to update user identity in database",
 							"sub", headers.Sub,
 							"error", err,
@@ -304,25 +335,56 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					}
 
 					// If the Emby username changed, rename the user in Emby.
+					// Try candidates in order; if the preferred one is taken, fall through.
 					if embyUsername != oldEmbyUsername {
-						slog.Info("syncing username change to Emby",
-							"sub", headers.Sub,
-							"old_name", oldEmbyUsername,
-							"new_name", embyUsername,
-						)
-						if err := embyClient.UpdateUserName(ctx, embyUserID, embyUsername); err != nil {
-							slog.Error("failed to rename user in Emby",
+						newName := embyUsername
+						// Check if the desired name is already taken by another user.
+						existingUser, lookupErr := embyClient.FindUserByName(ctx, newName)
+						if lookupErr == nil && existingUser != nil && existingUser.ID != embyUserID {
+							// Name is taken — try fallback candidates.
+							for _, candidate := range headers.usernameCandidates() {
+								if candidate == newName {
+									continue
+								}
+								eu, err := embyClient.FindUserByName(ctx, candidate)
+								if err != nil {
+									break // Can't check, keep current name.
+								}
+								if eu == nil || eu.ID == embyUserID {
+									newName = candidate
+									break
+								}
+							}
+						}
+
+						if newName != oldEmbyUsername {
+							slog.Info("syncing username change to Emby",
 								"sub", headers.Sub,
-								"emby_user_id", embyUserID,
-								"new_name", embyUsername,
-								"error", err,
+								"old_name", oldEmbyUsername,
+								"new_name", newName,
 							)
-							// Non-fatal: continue with auth using old name.
+							if err := embyClient.UpdateUserName(ctx, embyUserID, newName); err != nil {
+								slog.Error("failed to rename user in Emby",
+									"sub", headers.Sub,
+									"emby_user_id", embyUserID,
+									"new_name", newName,
+									"error", err,
+								)
+								// Non-fatal: continue with auth using old name.
+							} else {
+								embyUsername = newName
+							}
 						}
 					}
 				}
 			} else {
-				// User not in DB — check if user exists in Emby by the desired username.
+				// User not in DB — try to provision with the most preferred username.
+				// Candidate order: preferred_username > name > email.
+				// If the preferred name already exists in Emby, adopt that user.
+				// If creation fails due to a name conflict, fall through to the next candidate.
+				candidates := headers.usernameCandidates()
+				embyUsername = candidates[0] // At least one candidate is guaranteed (email).
+
 				existingUser, err := embyClient.FindUserByName(ctx, embyUsername)
 				if err != nil {
 					slog.Error("emby user lookup failed",
@@ -358,17 +420,31 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					}
 				} else {
 					// User doesn't exist anywhere — create new user.
+					// Try candidates in order; if creation fails (name conflict), try next.
 					slog.Info("provisioning new user",
 						"sub", headers.Sub,
 						"username", embyUsername,
 					)
 
-					newUser, err := embyClient.CreateUser(ctx, embyUsername, templateUserID)
-					if err != nil {
-						slog.Error("failed to create user in Emby",
+					var newUser *emby.User
+					var createErr error
+					for _, candidate := range candidates {
+						newUser, createErr = embyClient.CreateUser(ctx, candidate, templateUserID)
+						if createErr == nil {
+							embyUsername = candidate
+							break
+						}
+						// If creation failed, try the next candidate.
+						slog.Warn("username taken, trying next candidate",
 							"sub", headers.Sub,
-							"username", embyUsername,
-							"error", err,
+							"tried", candidate,
+							"error", createErr,
+						)
+					}
+					if createErr != nil {
+						slog.Error("failed to create user in Emby (all candidates exhausted)",
+							"sub", headers.Sub,
+							"error", createErr,
 						)
 						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 						return
@@ -408,7 +484,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 
 				// Store user in database.
-				if err := database.InsertUser(headers.Sub, headers.Name, headers.Email, embyUserID, userPassword); err != nil {
+				if err := database.InsertUser(headers.Sub, headers.displayName(), headers.Email, embyUserID, userPassword); err != nil {
 					slog.Error("failed to store user in database",
 						"sub", headers.Sub,
 						"emby_user_id", embyUserID,
@@ -534,7 +610,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					}
 
 					// Store new record in DB.
-					if insErr := database.InsertUser(headers.Sub, headers.Name, headers.Email, embyUserID, userPassword); insErr != nil {
+					if insErr := database.InsertUser(headers.Sub, headers.displayName(), headers.Email, embyUserID, userPassword); insErr != nil {
 						slog.Error("failed to store re-provisioned user in database",
 							"sub", headers.Sub,
 							"error", insErr,
