@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/db"
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/emby"
@@ -71,10 +70,6 @@ type OIDCHeaders struct {
 
 // Auth returns middleware that extracts headers, provisions users, and authenticates with Emby.
 func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templatePolicy []byte, oidcIssuerURL string) func(http.Handler) http.Handler {
-	// Track last synced picture URL per user to avoid redundant API calls.
-	lastPicture := make(map[string]string)
-	var pictureMu sync.Mutex
-
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
@@ -412,28 +407,27 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				"emby_user_id", authResult.User.ID,
 			)
 
-			// Non-blocking: set profile image if URL changed since last sync.
+			// Non-blocking: sync profile image when URL has changed (or on first provisioning).
 			if headers.PictureURL != "" {
-				pictureMu.Lock()
-				lastURL := lastPicture[headers.Email]
-				changed := lastURL != headers.PictureURL
-				if changed {
-					lastPicture[headers.Email] = headers.PictureURL
-				}
-				pictureMu.Unlock()
-
-				if changed {
+				shouldSync := record == nil || record.PictureURL != headers.PictureURL
+				if shouldSync {
+					pictureURL := headers.PictureURL
+					userEmail := headers.Email
 					go func() {
-						if err := embyClient.SetProfileImage(context.Background(), embyUserID, headers.PictureURL); err != nil {
+						if err := embyClient.SetProfileImage(context.Background(), embyUserID, pictureURL); err != nil {
 							slog.Warn("failed to set profile image",
-								"email", headers.Email,
+								"email", userEmail,
 								"emby_user_id", embyUserID,
 								"error", err,
 							)
-							// Reset cache so it retries next time.
-							pictureMu.Lock()
-							delete(lastPicture, headers.Email)
-							pictureMu.Unlock()
+							return
+						}
+						// Update the stored picture URL on success.
+						if err := database.UpdatePictureURL(userEmail, pictureURL); err != nil {
+							slog.Warn("failed to update stored picture URL",
+								"email", userEmail,
+								"error", err,
+							)
 						}
 					}()
 				}

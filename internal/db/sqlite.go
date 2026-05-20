@@ -13,14 +13,18 @@ const schema = `CREATE TABLE IF NOT EXISTS users (
   email TEXT PRIMARY KEY,
   emby_user_id TEXT NOT NULL,
   password TEXT NOT NULL,
+  picture_url TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );`
+
+const migration1 = `ALTER TABLE users ADD COLUMN picture_url TEXT NOT NULL DEFAULT '';`
 
 // UserRecord represents a row in the users table.
 type UserRecord struct {
 	Email      string
 	EmbyUserID string
 	Password   string
+	PictureURL string
 	CreatedAt  time.Time
 }
 
@@ -54,6 +58,9 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("open database: initialize schema: %w", err)
 	}
 
+	// Run migrations for existing databases.
+	_ = sqlitex.ExecuteScript(conn, migration1, nil) // Ignore error if column already exists.
+
 	return &DB{pool: pool}, nil
 }
 
@@ -66,7 +73,7 @@ func (d *DB) FindUser(email string) (*UserRecord, error) {
 	defer d.pool.Put(conn)
 
 	var record *UserRecord
-	err = sqlitex.Execute(conn, "SELECT email, emby_user_id, password, created_at FROM users WHERE email = :email", &sqlitex.ExecOptions{
+	err = sqlitex.Execute(conn, "SELECT email, emby_user_id, password, picture_url, created_at FROM users WHERE email = :email", &sqlitex.ExecOptions{
 		Named: map[string]any{
 			":email": email,
 		},
@@ -80,6 +87,7 @@ func (d *DB) FindUser(email string) (*UserRecord, error) {
 				Email:      stmt.GetText("email"),
 				EmbyUserID: stmt.GetText("emby_user_id"),
 				Password:   stmt.GetText("password"),
+				PictureURL: stmt.GetText("picture_url"),
 				CreatedAt:  createdAt,
 			}
 			return nil
@@ -129,6 +137,27 @@ func (d *DB) DeleteUser(email string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("delete user: %w", err)
+	}
+
+	return nil
+}
+
+// UpdatePictureURL updates the stored picture URL for a user.
+func (d *DB) UpdatePictureURL(email, pictureURL string) error {
+	conn, err := d.pool.Take(context.Background())
+	if err != nil {
+		return fmt.Errorf("update picture url: take connection: %w", err)
+	}
+	defer d.pool.Put(conn)
+
+	err = sqlitex.Execute(conn, "UPDATE users SET picture_url = :picture_url WHERE email = :email", &sqlitex.ExecOptions{
+		Named: map[string]any{
+			":email":       email,
+			":picture_url": pictureURL,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("update picture url: %w", err)
 	}
 
 	return nil
