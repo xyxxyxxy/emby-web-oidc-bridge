@@ -11,7 +11,7 @@ emby-web-oidc-bridge is a Go service that enables OIDC SSO for Emby's web interf
 
 ## Tech Stack
 
-- **Language**: Go 1.23 (stdlib-heavy, minimal dependencies)
+- **Language**: Go 1.24 (stdlib-heavy, minimal dependencies)
 - **Database**: SQLite via `zombiezen.com/go/sqlite` (pure-Go, no CGO)
 - **Testing**: `pgregory.net/rapid` for property-based tests, stdlib `testing` for unit/integration
 - **HTTP**: stdlib `net/http`, `net/http/httputil.ReverseProxy`
@@ -24,16 +24,16 @@ emby-web-oidc-bridge is a Go service that enables OIDC SSO for Emby's web interf
 
 ```bash
 # Tests
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go test ./...
 
 # Build
 docker build -t emby-auth-bridge .
 
 # Vet
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go vet ./...
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go vet ./...
 
 # Add dependency
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go get <package>
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go get <package>
 ```
 
 ## Project Layout

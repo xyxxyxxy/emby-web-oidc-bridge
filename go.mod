@@ -1,8 +1,8 @@
 module github.com/xyxxyxxy/emby-web-oidc-bridge
 
-go 1.23.0
+go 1.24.0
 
-toolchain go1.23.12
+toolchain go1.24.13
 
 require (
 	pgregory.net/rapid v1.1.0

@@ -13,12 +13,12 @@ description: Docker commands for building, testing, and running the Go service w
 
 ### Run tests
 ```bash
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go test ./...
 ```
 
 ### Run a specific package's tests
 ```bash
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./internal/middleware/...
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go test ./internal/middleware/...
 ```
 
 ### Build the image
@@ -49,18 +49,18 @@ docker compose up -d
 
 ### Add a Go dependency
 ```bash
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go get <package>@<version>
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go mod tidy
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go get <package>@<version>
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go mod tidy
 ```
 
 ### Format code
 ```bash
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine gofmt -w .
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine gofmt -w .
 ```
 
 ### Run vet
 ```bash
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go vet ./...
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go vet ./...
 ```
 
 ## Debugging
