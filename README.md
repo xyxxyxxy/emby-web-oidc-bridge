@@ -73,8 +73,8 @@ All other policy fields (library access, parental controls, `IsHidden`, remote a
 
 Full example configurations with docker-compose, oauth2-proxy config, and setup instructions are available in the [`examples/`](examples/) folder:
 
-- **[`examples/upstream-mode/`](examples/upstream-mode/)** — Recommended. oauth2-proxy forwards directly to the bridge. Enables profile image sync.
-- **[`examples/forward-auth-mode/`](examples/forward-auth-mode/)** — Caddy/Nginx forward_auth pattern. No profile image sync.
+- **[`examples/upstream-mode/`](examples/upstream-mode/)** — Recommended. oauth2-proxy forwards directly to the bridge.
+- **[`examples/forward-auth-mode/`](examples/forward-auth-mode/)** — Caddy/Nginx forward_auth pattern. Profile image sync via JWT.
 
 Minimal standalone configuration:
 
