@@ -45,6 +45,6 @@ func Health(database *db.DB, embyClient *emby.Client) http.HandlerFunc {
 			w.WriteHeader(http.StatusOK)
 		}
 
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}
 }

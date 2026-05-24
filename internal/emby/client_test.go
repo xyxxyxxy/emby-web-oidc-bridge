@@ -29,7 +29,7 @@ func TestFindUserByName_Found(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -57,7 +57,7 @@ func TestFindUserByName_NotFound(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -106,7 +106,7 @@ func TestCreateUser_Success(t *testing.T) {
 			"Name": "alice@example.com",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -162,7 +162,7 @@ func TestAuthenticateByName_Success(t *testing.T) {
 			ServerID:    "server-abc",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -192,7 +192,7 @@ func TestAuthenticateByName_HeaderFormat(t *testing.T) {
 			ServerID:    "srv",
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
@@ -310,7 +310,7 @@ func TestSetProfileImage_Success(t *testing.T) {
 	imageData := []byte("fake-image-bytes-png")
 	imageSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
-		w.Write(imageData)
+		_, _ = w.Write(imageData)
 	}))
 	defer imageSrv.Close()
 
@@ -381,7 +381,7 @@ func TestPing_Success(t *testing.T) {
 			t.Errorf("unexpected api_key: %s", r.URL.Query().Get("api_key"))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ServerName":"Emby"}`))
+		_, _ = w.Write([]byte(`{"ServerName":"Emby"}`))
 	}))
 	defer srv.Close()
 

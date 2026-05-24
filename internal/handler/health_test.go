@@ -16,7 +16,7 @@ func TestHealth_BothHealthy(t *testing.T) {
 	// Set up a mock Emby server that responds to /System/Info.
 	embyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ServerName":"Emby"}`)
+		_, _ = fmt.Fprint(w, `{"ServerName":"Emby"}`)
 	}))
 	defer embyServer.Close()
 
@@ -24,7 +24,7 @@ func TestHealth_BothHealthy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	embyClient := emby.NewClient(embyServer.URL, "test-api-key")
 
@@ -66,7 +66,7 @@ func TestHealth_EmbyDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	embyClient := emby.NewClient(embyServer.URL, "test-api-key")
 
@@ -100,7 +100,7 @@ func TestHealth_EmbyUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	embyClient := emby.NewClient("http://127.0.0.1:1", "test-api-key")
 
@@ -132,7 +132,7 @@ func TestHealth_DBDown(t *testing.T) {
 	// Set up a mock Emby server that responds OK.
 	embyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ServerName":"Emby"}`)
+		_, _ = fmt.Fprint(w, `{"ServerName":"Emby"}`)
 	}))
 	defer embyServer.Close()
 
@@ -141,7 +141,7 @@ func TestHealth_DBDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	database.Close()
+	_ = database.Close()
 
 	embyClient := emby.NewClient(embyServer.URL, "test-api-key")
 

@@ -38,7 +38,7 @@ func parseErrorCIDR(t *testing.T, cidr string) *net.IPNet {
 func buildErrorChain(trusted []*net.IPNet, embyClient *emby.Client, database *db.DB) http.Handler {
 	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("proxied"))
+		_, _ = w.Write([]byte("proxied"))
 	})
 
 	authMiddleware := middleware.Auth(embyClient, database, "template-user-id", testTemplatePolicy, "")
@@ -55,7 +55,7 @@ func TestIntegrationError_UntrustedIPRejection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	embyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("Emby server should not be called for untrusted IP")
@@ -88,7 +88,7 @@ func TestIntegrationError_MissingSub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	embyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("Emby server should not be called when sub is missing")
@@ -122,7 +122,7 @@ func TestIntegrationError_EmbyAPIUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	// Create and immediately close a server to simulate unreachable Emby.
 	embyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -154,7 +154,7 @@ func TestIntegrationError_UserCreationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	mux := http.NewServeMux()
 	// FindUserByName — user not found in Emby.
@@ -163,7 +163,7 @@ func TestIntegrationError_UserCreationFailure(t *testing.T) {
 			"Items": []map[string]interface{}{},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 	// CreateUser — returns 500 to simulate failure.
 	mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
@@ -198,7 +198,7 @@ func TestIntegrationError_HealthCheckDBDown(t *testing.T) {
 	// Set up a healthy Emby server.
 	embyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, `{"ServerName":"Emby"}`)
+		_, _ = fmt.Fprint(w, `{"ServerName":"Emby"}`)
 	}))
 	defer embyServer.Close()
 
@@ -207,7 +207,7 @@ func TestIntegrationError_HealthCheckDBDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	database.Close()
+	_ = database.Close()
 
 	embyClient := emby.NewClient(embyServer.URL, "test-api-key")
 
@@ -248,7 +248,7 @@ func TestIntegrationError_HealthCheckEmbyDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open database: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	embyClient := emby.NewClient(embyServer.URL, "test-api-key")
 

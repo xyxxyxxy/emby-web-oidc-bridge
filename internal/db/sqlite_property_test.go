@@ -26,7 +26,7 @@ func TestDatabaseRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open failed: %v", err)
 		}
-		defer database.Close()
+		defer func() { _ = database.Close() }()
 
 		sub := rapid.StringMatching(`[a-z0-9]{8,20}`).Draw(t, "sub")
 		name := rapid.StringMatching(`[A-Za-z ]{3,20}`).Draw(t, "name")
@@ -46,6 +46,7 @@ func TestDatabaseRoundTrip(t *testing.T) {
 
 		if record == nil {
 			t.Fatalf("FindUserBySub returned nil for sub %q after insert", sub)
+			return
 		}
 
 		if record.OIDCSub != sub {
@@ -73,7 +74,7 @@ func TestPasswordStability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	rapid.Check(t, func(t *rapid.T) {
 		sub := rapid.StringMatching(`[a-z0-9]{8,20}`).Draw(t, "sub")
@@ -96,6 +97,7 @@ func TestPasswordStability(t *testing.T) {
 			}
 			if record == nil {
 				t.Fatalf("FindUserBySub (lookup %d) returned nil for existing user %q", i+1, sub)
+				return
 			}
 			if record.Password != password {
 				t.Fatalf("password changed on lookup %d: got %q, want %q", i+1, record.Password, password)

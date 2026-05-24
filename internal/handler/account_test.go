@@ -23,7 +23,7 @@ func setupTestDB(t *testing.T) *db.DB {
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
 	}
-	t.Cleanup(func() { database.Close() })
+	t.Cleanup(func() { _ = database.Close() })
 	return database
 }
 

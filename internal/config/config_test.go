@@ -10,19 +10,19 @@ import (
 )
 
 func clearEnv() {
-	os.Unsetenv("EMBY_API_URL")
-	os.Unsetenv("EMBY_API_KEY")
-	os.Unsetenv("TEMPLATE_USER_NAME")
-	os.Unsetenv("TRUSTED_PROXIES")
-	os.Unsetenv("BRIDGE_PORT")
-	os.Unsetenv("DATABASE_PATH")
+	_ = os.Unsetenv("EMBY_API_URL")
+	_ = os.Unsetenv("EMBY_API_KEY")
+	_ = os.Unsetenv("TEMPLATE_USER_NAME")
+	_ = os.Unsetenv("TRUSTED_PROXIES")
+	_ = os.Unsetenv("BRIDGE_PORT")
+	_ = os.Unsetenv("DATABASE_PATH")
 }
 
 func setRequiredEnv() {
-	os.Setenv("EMBY_API_URL", "http://emby:8096/emby")
-	os.Setenv("EMBY_API_KEY", "test-api-key")
-	os.Setenv("TEMPLATE_USER_NAME", "template")
-	os.Setenv("TRUSTED_PROXIES", "192.168.1.0/24")
+	_ = os.Setenv("EMBY_API_URL", "http://emby:8096/emby")
+	_ = os.Setenv("EMBY_API_KEY", "test-api-key")
+	_ = os.Setenv("TEMPLATE_USER_NAME", "template")
+	_ = os.Setenv("TRUSTED_PROXIES", "192.168.1.0/24")
 }
 
 func TestLoad_AllRequiredSet(t *testing.T) {
@@ -57,9 +57,9 @@ func TestLoad_AllRequiredSet(t *testing.T) {
 
 func TestLoad_MissingEmbyAPIURL(t *testing.T) {
 	clearEnv()
-	os.Setenv("EMBY_API_KEY", "key")
-	os.Setenv("TEMPLATE_USER_NAME", "template")
-	os.Setenv("TRUSTED_PROXIES", "10.0.0.1")
+	_ = os.Setenv("EMBY_API_KEY", "key")
+	_ = os.Setenv("TEMPLATE_USER_NAME", "template")
+	_ = os.Setenv("TRUSTED_PROXIES", "10.0.0.1")
 	defer clearEnv()
 
 	_, err := Load()
@@ -73,9 +73,9 @@ func TestLoad_MissingEmbyAPIURL(t *testing.T) {
 
 func TestLoad_MissingEmbyAPIKey(t *testing.T) {
 	clearEnv()
-	os.Setenv("EMBY_API_URL", "http://emby:8096/emby")
-	os.Setenv("TEMPLATE_USER_NAME", "template")
-	os.Setenv("TRUSTED_PROXIES", "10.0.0.1")
+	_ = os.Setenv("EMBY_API_URL", "http://emby:8096/emby")
+	_ = os.Setenv("TEMPLATE_USER_NAME", "template")
+	_ = os.Setenv("TRUSTED_PROXIES", "10.0.0.1")
 	defer clearEnv()
 
 	_, err := Load()
@@ -89,9 +89,9 @@ func TestLoad_MissingEmbyAPIKey(t *testing.T) {
 
 func TestLoad_MissingTemplateUserName(t *testing.T) {
 	clearEnv()
-	os.Setenv("EMBY_API_URL", "http://emby:8096/emby")
-	os.Setenv("EMBY_API_KEY", "key")
-	os.Setenv("TRUSTED_PROXIES", "10.0.0.1")
+	_ = os.Setenv("EMBY_API_URL", "http://emby:8096/emby")
+	_ = os.Setenv("EMBY_API_KEY", "key")
+	_ = os.Setenv("TRUSTED_PROXIES", "10.0.0.1")
 	defer clearEnv()
 
 	_, err := Load()
@@ -105,9 +105,9 @@ func TestLoad_MissingTemplateUserName(t *testing.T) {
 
 func TestLoad_MissingTrustedProxies(t *testing.T) {
 	clearEnv()
-	os.Setenv("EMBY_API_URL", "http://emby:8096/emby")
-	os.Setenv("EMBY_API_KEY", "key")
-	os.Setenv("TEMPLATE_USER_NAME", "template")
+	_ = os.Setenv("EMBY_API_URL", "http://emby:8096/emby")
+	_ = os.Setenv("EMBY_API_KEY", "key")
+	_ = os.Setenv("TEMPLATE_USER_NAME", "template")
 	defer clearEnv()
 
 	_, err := Load()
@@ -122,7 +122,7 @@ func TestLoad_MissingTrustedProxies(t *testing.T) {
 func TestLoad_CustomPort(t *testing.T) {
 	clearEnv()
 	setRequiredEnv()
-	os.Setenv("BRIDGE_PORT", "9090")
+	_ = os.Setenv("BRIDGE_PORT", "9090")
 	defer clearEnv()
 
 	cfg, err := Load()
@@ -137,7 +137,7 @@ func TestLoad_CustomPort(t *testing.T) {
 func TestLoad_InvalidPort(t *testing.T) {
 	clearEnv()
 	setRequiredEnv()
-	os.Setenv("BRIDGE_PORT", "not-a-number")
+	_ = os.Setenv("BRIDGE_PORT", "not-a-number")
 	defer clearEnv()
 
 	_, err := Load()
@@ -149,7 +149,7 @@ func TestLoad_InvalidPort(t *testing.T) {
 func TestLoad_CustomDatabasePath(t *testing.T) {
 	clearEnv()
 	setRequiredEnv()
-	os.Setenv("DATABASE_PATH", "/tmp/test.db")
+	_ = os.Setenv("DATABASE_PATH", "/tmp/test.db")
 	defer clearEnv()
 
 	cfg, err := Load()
@@ -264,10 +264,10 @@ func TestMissingConfigErrorReporting(t *testing.T) {
 
 		// Clear all env vars first
 		for _, v := range requiredVars {
-			os.Unsetenv(v)
+			_ = os.Unsetenv(v)
 		}
-		os.Unsetenv("BRIDGE_PORT")
-		os.Unsetenv("DATABASE_PATH")
+		_ = os.Unsetenv("BRIDGE_PORT")
+		_ = os.Unsetenv("DATABASE_PATH")
 
 		// Set all required vars with valid values
 		validValues := map[string]string{
@@ -277,14 +277,14 @@ func TestMissingConfigErrorReporting(t *testing.T) {
 			"TRUSTED_PROXIES":    "192.168.1.0/24",
 		}
 		for _, v := range requiredVars {
-			os.Setenv(v, validValues[v])
+			_ = os.Setenv(v, validValues[v])
 		}
 
 		// Unset the vars selected by the bitmask
 		var missingVars []string
 		for i, v := range requiredVars {
 			if bitmask&(1<<i) != 0 {
-				os.Unsetenv(v)
+				_ = os.Unsetenv(v)
 				missingVars = append(missingVars, v)
 			}
 		}
@@ -312,7 +312,7 @@ func TestMissingConfigErrorReporting(t *testing.T) {
 
 		// Clean up
 		for _, v := range requiredVars {
-			os.Unsetenv(v)
+			_ = os.Unsetenv(v)
 		}
 	})
 }

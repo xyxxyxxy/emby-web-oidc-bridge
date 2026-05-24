@@ -50,7 +50,7 @@ func TestAuth_MissingSub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	srv := setupEmbyServer(func(mux *http.ServeMux) {})
 	defer srv.Close()
@@ -80,7 +80,7 @@ func TestAuth_MissingNameAndEmail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	srv := setupEmbyServer(func(mux *http.ServeMux) {})
 	defer srv.Close()
@@ -110,7 +110,7 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	// Pre-insert user into DB.
 	err = database.InsertUser("sub-alice", "Alice", "alice@example.com", "user-123", "storedpw")
@@ -124,7 +124,7 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 				Username string `json:"Username"`
 				Pw       string `json:"Pw"`
 			}
-			json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(r.Body).Decode(&body)
 
 			// Username should be the name field "Alice".
 			if body.Username != "Alice" {
@@ -140,7 +140,7 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/user-123/Policy", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -156,7 +156,7 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 	})
 	defer srv.Close()
@@ -191,7 +191,7 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	var createCalled bool
 	var createdName string
@@ -202,14 +202,14 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 				"Items": []map[string]interface{}{},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
 			createCalled = true
 			var body struct {
 				Name string `json:"Name"`
 			}
-			json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			createdName = body.Name
 
 			resp := map[string]interface{}{
@@ -217,7 +217,7 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 				"Name": body.Name,
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/new-user-456/Password", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -236,7 +236,7 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{
@@ -245,7 +245,7 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 	})
 	defer srv.Close()
@@ -304,7 +304,7 @@ func TestAuth_EmailFallbackAsUsername(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	var createdName string
 
@@ -312,15 +312,15 @@ func TestAuth_EmailFallbackAsUsername(t *testing.T) {
 		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
 			var body struct{ Name string `json:"Name"` }
-			json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			createdName = body.Name
 			resp := map[string]interface{}{"Id": "email-user-1", "Name": body.Name}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/email-user-1/Password", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -334,7 +334,7 @@ func TestAuth_EmailFallbackAsUsername(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{
@@ -343,7 +343,7 @@ func TestAuth_EmailFallbackAsUsername(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 	})
 	defer srv.Close()
@@ -374,7 +374,7 @@ func TestAuth_AdoptedUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	var passwordUpdateCalled bool
 
@@ -386,7 +386,7 @@ func TestAuth_AdoptedUser(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/existing-emby-789/Password", func(w http.ResponseWriter, r *http.Request) {
 			passwordUpdateCalled = true
@@ -401,7 +401,7 @@ func TestAuth_AdoptedUser(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{
@@ -410,7 +410,7 @@ func TestAuth_AdoptedUser(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 	})
 	defer srv.Close()
@@ -459,7 +459,7 @@ func TestAuth_EmbyUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	srv.Close()
@@ -489,13 +489,13 @@ func TestAuth_UserCreationFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	srv := setupEmbyServer(func(mux *http.ServeMux) {
 		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -528,7 +528,7 @@ func TestAuth_AuthTokenInContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	err = database.InsertUser("sub-ctx", "Context User", "context@example.com", "user-ctx", "ctxpass")
 	if err != nil {
@@ -543,7 +543,7 @@ func TestAuth_AuthTokenInContext(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/user-ctx/Policy", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -554,7 +554,7 @@ func TestAuth_AuthTokenInContext(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 	})
 	defer srv.Close()
@@ -591,18 +591,18 @@ func TestAuth_SubFromJWT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	srv := setupEmbyServer(func(mux *http.ServeMux) {
 		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{"Id": "jwt-user-1", "Name": "jwt@example.com"}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/jwt-user-1/Password", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -616,7 +616,7 @@ func TestAuth_SubFromJWT(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{
@@ -625,7 +625,7 @@ func TestAuth_SubFromJWT(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 	})
 	defer srv.Close()
@@ -670,7 +670,7 @@ func TestAuth_UsernameSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	// Insert user with old name.
 	err = database.InsertUser("sub-rename", "Old Name", "user@example.com", "emby-rename-1", "renamepass")
@@ -686,7 +686,7 @@ func TestAuth_UsernameSync(t *testing.T) {
 		mux.HandleFunc("POST /Users/emby-rename-1", func(w http.ResponseWriter, r *http.Request) {
 			renameCalled = true
 			var body map[string]string
-			json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			newNameSent = body["Name"]
 			w.WriteHeader(http.StatusOK)
 		})
@@ -697,7 +697,7 @@ func TestAuth_UsernameSync(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/emby-rename-1/Policy", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -709,7 +709,7 @@ func TestAuth_UsernameSync(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 	})
 	defer srv.Close()
@@ -878,7 +878,7 @@ func TestAuth_PreferredUsernameOverName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	var createdName string
 
@@ -886,15 +886,15 @@ func TestAuth_PreferredUsernameOverName(t *testing.T) {
 		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
 			var body struct{ Name string `json:"Name"` }
-			json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			createdName = body.Name
 			resp := map[string]interface{}{"Id": "pref-user-1", "Name": body.Name}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/pref-user-1/Password", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -908,7 +908,7 @@ func TestAuth_PreferredUsernameOverName(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{
@@ -917,7 +917,7 @@ func TestAuth_PreferredUsernameOverName(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 	})
 	defer srv.Close()
@@ -954,7 +954,7 @@ func TestAuth_UniquenessFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	var createdNames []string
 
@@ -963,13 +963,13 @@ func TestAuth_UniquenessFallback(t *testing.T) {
 		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		// CreateUser — first call with "johndoe" fails (race condition: name taken),
 		// second call with "John Doe" also fails, third with email succeeds.
 		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
 			var body struct{ Name string `json:"Name"` }
-			json.NewDecoder(r.Body).Decode(&body)
+			_ = json.NewDecoder(r.Body).Decode(&body)
 			createdNames = append(createdNames, body.Name)
 
 			if body.Name == "johndoe" || body.Name == "John Doe" {
@@ -980,7 +980,7 @@ func TestAuth_UniquenessFallback(t *testing.T) {
 			// Email fallback succeeds.
 			resp := map[string]interface{}{"Id": "fallback-user-1", "Name": body.Name}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/fallback-user-1/Password", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
@@ -994,7 +994,7 @@ func TestAuth_UniquenessFallback(t *testing.T) {
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{
@@ -1003,7 +1003,7 @@ func TestAuth_UniquenessFallback(t *testing.T) {
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(resp)
+			_ = json.NewEncoder(w).Encode(resp)
 		})
 	})
 	defer srv.Close()

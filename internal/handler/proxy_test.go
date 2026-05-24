@@ -16,7 +16,7 @@ func TestProxy_ForwardsRequestToEmby(t *testing.T) {
 		w.Header().Set("X-Backend-Path", r.URL.Path)
 		w.Header().Set("X-Backend-Query", r.URL.RawQuery)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("backend response"))
+		_, _ = w.Write([]byte("backend response"))
 	}))
 	defer backend.Close()
 

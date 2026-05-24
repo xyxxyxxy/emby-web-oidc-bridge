@@ -270,7 +270,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						req.Header.Set("Authorization", "Bearer "+accessToken)
 						resp, err := oidcClient.Do(req)
 						if err == nil {
-							defer resp.Body.Close()
+							defer func() { _ = resp.Body.Close() }()
 							if resp.StatusCode == http.StatusOK {
 								var claims struct {
 									Picture string `json:"picture"`

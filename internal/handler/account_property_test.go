@@ -29,7 +29,7 @@ func TestAccountPageCredentialDisplay(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open failed: %v", err)
 		}
-		defer database.Close()
+		defer func() { _ = database.Close() }()
 
 		sub := rapid.StringMatching(`[a-z0-9]{8,20}`).Draw(t, "sub")
 		name := rapid.StringMatching(`[A-Za-z]{3,15}`).Draw(t, "name")
