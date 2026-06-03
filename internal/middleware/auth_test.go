@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/db"
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/emby"
@@ -1040,5 +1041,247 @@ func TestAuth_UniquenessFallback(t *testing.T) {
 	}
 	if createdNames[2] != "john@example.com" {
 		t.Errorf("third attempt should be 'john@example.com', got %q", createdNames[2])
+	}
+}
+
+// TestAuth_PolicyUpdateSkippedWhenAlreadyCorrect verifies that the background policy
+// enforcement goroutine does NOT call UpdatePolicyRaw when IsDisabled is already false
+// and EnableUserPreferenceAccess is already false.
+func TestAuth_PolicyUpdateSkippedWhenAlreadyCorrect(t *testing.T) {
+	middleware.ClearSessionCache()
+
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	err = database.InsertUser("sub-policy-skip", "PolicySkip", "policyskip@example.com", "policy-skip-1", "skippass")
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	policyUpdateCalled := make(chan struct{}, 1)
+	policyGetDone := make(chan struct{})
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "skip-token",
+				"User":        map[string]interface{}{"Id": "policy-skip-1", "Name": "PolicySkip"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("GET /Users/policy-skip-1", func(w http.ResponseWriter, r *http.Request) {
+			defer close(policyGetDone)
+			// Policy already has the desired values — no update needed.
+			resp := map[string]interface{}{
+				"Id":   "policy-skip-1",
+				"Name": "PolicySkip",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("POST /Users/policy-skip-1/Policy", func(w http.ResponseWriter, r *http.Request) {
+			policyUpdateCalled <- struct{}{}
+			w.WriteHeader(http.StatusNoContent)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Sub", "sub-policy-skip")
+	req.Header.Set("X-Forwarded-User", "PolicySkip")
+	req.Header.Set("X-Forwarded-Email", "policyskip@example.com")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+
+	// Wait for the background goroutine to complete its GET request.
+	<-policyGetDone
+
+	// The policy POST should NOT have been called since values are already correct.
+	select {
+	case <-policyUpdateCalled:
+		t.Error("UpdatePolicyRaw should NOT have been called when policy already matches desired state")
+	default:
+		// Expected: no update called.
+	}
+}
+
+// TestAuth_PolicyUpdateCalledWhenDisabled verifies that the background policy
+// enforcement goroutine DOES call UpdatePolicyRaw when IsDisabled is true.
+func TestAuth_PolicyUpdateCalledWhenDisabled(t *testing.T) {
+	middleware.ClearSessionCache()
+
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	err = database.InsertUser("sub-policy-disabled", "PolicyDisabled", "policydisabled@example.com", "policy-disabled-1", "disabledpass")
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	policyUpdateCalled := make(chan struct{}, 1)
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "disabled-token",
+				"User":        map[string]interface{}{"Id": "policy-disabled-1", "Name": "PolicyDisabled"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("GET /Users/policy-disabled-1", func(w http.ResponseWriter, r *http.Request) {
+			// User is disabled — policy update should be triggered.
+			resp := map[string]interface{}{
+				"Id":   "policy-disabled-1",
+				"Name": "PolicyDisabled",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 true,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("POST /Users/policy-disabled-1/Policy", func(w http.ResponseWriter, r *http.Request) {
+			// Verify the policy being set has IsDisabled=false.
+			var policy map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&policy)
+			if isDisabled, ok := policy["IsDisabled"].(bool); ok && isDisabled {
+				t.Error("expected IsDisabled=false in policy update")
+			}
+			policyUpdateCalled <- struct{}{}
+			w.WriteHeader(http.StatusNoContent)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Sub", "sub-policy-disabled")
+	req.Header.Set("X-Forwarded-User", "PolicyDisabled")
+	req.Header.Set("X-Forwarded-Email", "policydisabled@example.com")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+
+	// Wait for the background goroutine to call the policy update endpoint.
+	timeout := time.After(5 * time.Second)
+	select {
+	case <-policyUpdateCalled:
+		// Expected: policy update was called because IsDisabled was true.
+	case <-timeout:
+		t.Fatal("timed out waiting for policy update call")
+	}
+}
+
+// TestAuth_PolicyUpdateCalledWhenPrefAccessEnabled verifies that the background policy
+// enforcement goroutine DOES call UpdatePolicyRaw when EnableUserPreferenceAccess is true.
+func TestAuth_PolicyUpdateCalledWhenPrefAccessEnabled(t *testing.T) {
+	middleware.ClearSessionCache()
+
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	err = database.InsertUser("sub-policy-pref", "PolicyPref", "policypref@example.com", "policy-pref-1", "prefpass")
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	policyUpdateCalled := make(chan struct{}, 1)
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "pref-token",
+				"User":        map[string]interface{}{"Id": "policy-pref-1", "Name": "PolicyPref"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("GET /Users/policy-pref-1", func(w http.ResponseWriter, r *http.Request) {
+			// EnableUserPreferenceAccess is true — policy update should be triggered.
+			resp := map[string]interface{}{
+				"Id":   "policy-pref-1",
+				"Name": "PolicyPref",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": true,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("POST /Users/policy-pref-1/Policy", func(w http.ResponseWriter, r *http.Request) {
+			// Verify the policy being set has EnableUserPreferenceAccess=false.
+			var policy map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&policy)
+			if prefAccess, ok := policy["EnableUserPreferenceAccess"].(bool); ok && prefAccess {
+				t.Error("expected EnableUserPreferenceAccess=false in policy update")
+			}
+			policyUpdateCalled <- struct{}{}
+			w.WriteHeader(http.StatusNoContent)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Sub", "sub-policy-pref")
+	req.Header.Set("X-Forwarded-User", "PolicyPref")
+	req.Header.Set("X-Forwarded-Email", "policypref@example.com")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+
+	// Wait for the background goroutine to call the policy update endpoint.
+	timeout := time.After(5 * time.Second)
+	select {
+	case <-policyUpdateCalled:
+		// Expected: policy update was called because EnableUserPreferenceAccess was true.
+	case <-timeout:
+		t.Fatal("timed out waiting for policy update call")
 	}
 }

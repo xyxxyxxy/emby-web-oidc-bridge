@@ -706,7 +706,8 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			}
 
 			// Non-blocking: enforce IsDisabled=false and EnableUserPreferenceAccess=false
-			// on the user's current policy (preserves admin-configured settings).
+			// on the user's current policy. Only updates if the values differ to avoid
+			// spamming Emby logs with unnecessary policy update notifications.
 			go func() {
 				bgCtx, bgCancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer bgCancel()
@@ -723,6 +724,15 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				if json.Unmarshal(currentPolicy, &policy) != nil {
 					return
 				}
+
+				// Check whether policy changes are actually needed.
+				isDisabled, _ := policy["IsDisabled"].(bool)
+				enablePrefAccess, _ := policy["EnableUserPreferenceAccess"].(bool)
+				if !isDisabled && !enablePrefAccess {
+					// Policy already matches desired state — skip update.
+					return
+				}
+
 				policy["IsDisabled"] = false
 				policy["EnableUserPreferenceAccess"] = false
 				updatedPolicy, marshalErr := json.Marshal(policy)
