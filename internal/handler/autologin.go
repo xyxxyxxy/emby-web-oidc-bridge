@@ -80,14 +80,10 @@ const credentialScriptTemplate = `<script>
     localStorage.setItem("servercredentials3", JSON.stringify(existing));
 
     var hash = window.location.hash || "";
-    if (hash.indexOf("manuallogin") !== -1 || hash.indexOf("selectserver") !== -1) {
-        if (!sessionStorage.getItem("embybridge_redirect")) {
-            sessionStorage.setItem("embybridge_redirect", "1");
-            window.location.href = "/web/index.html";
-            return;
-        }
+    if (hash.indexOf("manuallogin") !== -1 || hash.indexOf("selectserver") !== -1 || hash.indexOf("login") !== -1) {
+        window.location.replace("/web/index.html");
+        return;
     }
-    sessionStorage.removeItem("embybridge_redirect");
 })();
 </script>`
 
