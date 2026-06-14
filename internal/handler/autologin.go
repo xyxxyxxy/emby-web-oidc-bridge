@@ -55,7 +55,13 @@ var autoLoginTmpl = template.Must(template.New("autologin").Parse(autoLoginTempl
 
 // credentialScriptTemplate generates an inline script that sets Emby credentials in localStorage.
 // Values are JSON-encoded to prevent XSS via script injection.
-const credentialScriptTemplate = `<script>
+const credentialScriptTemplate = `<style>
+/* Hide the Sign Out button — logout is managed by the OIDC provider, not Emby. */
+.btnLogout, [data-id="logout"], [data-action="logout"], .btnSignOut {
+    display: none !important;
+}
+</style>
+<script>
 (function() {
     var serverId = %s;
     var userId = %s;
@@ -106,6 +112,14 @@ const credentialScriptTemplate = `<script>
             window.location.reload();
         }
     });
+
+    // Also hide logout buttons via JS for elements rendered dynamically.
+    var observer = new MutationObserver(function() {
+        document.querySelectorAll('.btnLogout, [data-id="logout"], [data-action="logout"], .btnSignOut').forEach(function(el) {
+            el.style.display = "none";
+        });
+    });
+    observer.observe(document.documentElement, {childList: true, subtree: true});
 })();
 </script>`
 
