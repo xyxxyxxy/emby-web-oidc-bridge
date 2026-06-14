@@ -80,8 +80,9 @@ const credentialScriptTemplate = `<script>
     localStorage.setItem("servercredentials3", JSON.stringify(existing));
 
     var hash = window.location.hash || "";
-    if (hash.indexOf("manuallogin") !== -1 || hash.indexOf("selectserver") !== -1 || hash.indexOf("login") !== -1) {
-        window.location.replace("/web/index.html");
+    if (hash.indexOf("manuallogin") !== -1 || hash.indexOf("selectserver") !== -1 || hash.indexOf("login") !== -1 || hash.indexOf("startup") !== -1) {
+        history.replaceState(null, "", "/web/index.html");
+        window.location.reload();
         return;
     }
 })();
