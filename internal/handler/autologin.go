@@ -55,39 +55,71 @@ var autoLoginTmpl = template.Must(template.New("autologin").Parse(autoLoginTempl
 
 // credentialScriptTemplate generates an inline script that sets Emby credentials in localStorage.
 // Values are JSON-encoded to prevent XSS via script injection.
-const credentialScriptTemplate = `<script>
+const credentialScriptTemplate = `<style>
+/* Hide Sign Out and Switch User buttons — managed by the OIDC provider, not Emby. */
+.btnLogout, [data-id="logout"], [data-id="changeuser"], [data-action="logout"], .btnSignOut {
+    display: none !important;
+}
+</style>
+<script>
 (function() {
     var serverId = %s;
     var userId = %s;
     var accessToken = %s;
-    var existing = {};
-    try { existing = JSON.parse(localStorage.getItem("servercredentials3")) || {}; } catch(e) {}
-    var servers = (existing.Servers || []);
-    var server = null;
-    for (var i = 0; i < servers.length; i++) {
-        if (servers[i].Id === serverId) { server = servers[i]; break; }
+
+    function setCredentials() {
+        var existing = {};
+        try { existing = JSON.parse(localStorage.getItem("servercredentials3")) || {}; } catch(e) {}
+        var servers = (existing.Servers || []);
+        var server = null;
+        for (var i = 0; i < servers.length; i++) {
+            if (servers[i].Id === serverId) { server = servers[i]; break; }
+        }
+        if (!server) { server = {"Id": serverId, "Type": "Server"}; servers.push(server); }
+        var origin = window.location.origin;
+        server.ManualAddress = origin;
+        server.ManualAddressOnly = true;
+        server.Name = "Emby";
+        server.UserId = userId;
+        server.DateLastAccessed = Date.now();
+        server.LastConnectionMode = 2;
+        server.Users = [{"UserId": userId, "AccessToken": accessToken}];
+        existing.Servers = servers;
+        localStorage.setItem("servercredentials3", JSON.stringify(existing));
     }
-    if (!server) { server = {"Id": serverId, "Type": "Server"}; servers.push(server); }
-    var origin = window.location.origin;
-    server.ManualAddress = origin;
-    server.ManualAddressOnly = true;
-    server.Name = "Emby";
-    server.UserId = userId;
-    server.DateLastAccessed = Date.now();
-    server.LastConnectionMode = 2;
-    server.Users = [{"UserId": userId, "AccessToken": accessToken}];
-    existing.Servers = servers;
-    localStorage.setItem("servercredentials3", JSON.stringify(existing));
+
+    setCredentials();
+
+    function isLoginHash(h) {
+        return h.indexOf("manuallogin") !== -1 || h.indexOf("selectserver") !== -1 ||
+               h.indexOf("login") !== -1 || h.indexOf("startup") !== -1;
+    }
 
     var hash = window.location.hash || "";
-    if (hash.indexOf("manuallogin") !== -1 || hash.indexOf("selectserver") !== -1) {
-        if (!sessionStorage.getItem("embybridge_redirect")) {
-            sessionStorage.setItem("embybridge_redirect", "1");
-            window.location.href = "/web/index.html";
-            return;
-        }
+    if (isLoginHash(hash)) {
+        history.replaceState(null, "", "/web/index.html");
+        window.location.reload();
+        return;
     }
-    sessionStorage.removeItem("embybridge_redirect");
+
+    // Guard against Emby JS navigating to login pages after initialization.
+    // Re-inject credentials and redirect if Emby tries to show a login screen.
+    window.addEventListener("hashchange", function() {
+        var newHash = window.location.hash || "";
+        if (isLoginHash(newHash)) {
+            setCredentials();
+            history.replaceState(null, "", "/web/index.html");
+            window.location.reload();
+        }
+    });
+
+    // Also hide logout buttons via JS for elements rendered dynamically.
+    var observer = new MutationObserver(function() {
+        document.querySelectorAll('.btnLogout, [data-id="logout"], [data-id="changeuser"], [data-action="logout"], .btnSignOut').forEach(function(el) {
+            el.style.display = "none";
+        });
+    });
+    observer.observe(document.documentElement, {childList: true, subtree: true});
 })();
 </script>`
 

@@ -86,7 +86,7 @@ func main() {
 	auth := middleware.Auth(embyClient, database, templateUser.ID, templatePolicy, cfg.OIDCIssuerURL)
 
 	// Create proxy handler.
-	proxyHandler := handler.Proxy(cfg.EmbyAPIURL)
+	proxyHandler := handler.Proxy(cfg.EmbyAPIURL, middleware.InvalidateSession)
 
 	// Register routes.
 	mux := http.NewServeMux()

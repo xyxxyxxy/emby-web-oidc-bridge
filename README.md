@@ -40,6 +40,8 @@ Users are automatically provisioned on first login with settings copied from a c
 - Seamless web login (no username/password entry)
 - Template-based user creation (inherit permissions from a configured user)
 - Profile image sync from OIDC claims
+- Session cache with automatic invalidation on user deletion (401 detection)
+- Sign Out and Switch User buttons hidden from Emby web UI
 - Account page showing credentials for TV/mobile apps
 - Trusted proxy IP validation
 - Single static binary (~10MB Docker image)
@@ -58,7 +60,7 @@ The bridge enforces minimal policy overrides to function correctly, while leavin
 
 **On user creation:** The template user's full policy is applied (library access, parental controls, IsHidden, etc.).
 
-**On every login:** The bridge fetches the user's current policy from Emby and only enforces two fields:
+**On every login:** The bridge fetches the user's current policy from Emby and only enforces two fields if they differ from the expected values (skipping unnecessary API calls):
 
 | Policy Field | Enforced Value | Reason |
 |-------------|-------|--------|
@@ -68,6 +70,17 @@ The bridge enforces minimal policy overrides to function correctly, while leavin
 All other policy fields (library access, parental controls, `IsHidden`, remote access, etc.) are fully controlled by the admin per-user after creation. The bridge will not overwrite them.
 
 **Important:** If you disable a user in Emby's admin UI, the bridge will re-enable them on their next login. To revoke access, remove the user from your OIDC provider or oauth2-proxy's allowed list instead.
+
+## Hidden UI Elements
+
+The bridge hides the following buttons from the Emby web interface since they don't apply when authentication is managed through OIDC:
+
+| Button | Reason |
+|--------|--------|
+| **Sign Out** | Logging out of Emby makes no sense behind the bridge — the user would be re-authenticated immediately via oauth2-proxy. To sign out, users should log out of the OIDC provider directly. |
+| **Switch User** | User identity is determined by the OIDC session, not by Emby's local user selection. Switching users requires authenticating as a different identity at the OIDC provider. |
+
+These buttons are hidden via CSS injected into the Emby web page. They are not removed from the DOM, so admin users accessing Emby directly (not through the bridge) will still see them.
 
 ## Quick Start
 
@@ -161,6 +174,7 @@ Both deployment modes support profile image sync when configured correctly. Your
 |-------|---------|
 | `/health` | Health check (DB + Emby connectivity) |
 | `/account` | Shows generated credentials for TV/mobile apps |
+| `/web/index.html` | Emby web UI with injected credentials |
 | `/*` | Reverse proxy to Emby (after auth) |
 
 ## Building
@@ -177,10 +191,10 @@ All development happens inside Docker — no Go toolchain required on the host.
 
 ```bash
 # Run tests
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go test ./...
 
 # Run vet
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go vet ./...
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go vet ./...
 
 # Build locally
 docker build -t emby-auth-bridge .

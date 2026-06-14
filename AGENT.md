@@ -8,7 +8,7 @@ This document provides guidance for AI agents working on the emby-web-oidc-bridg
 
 ## Tech Stack
 
-- **Language**: Go 1.23
+- **Language**: Go 1.24
 - **Module path**: `github.com/xyxxyxxy/emby-web-oidc-bridge`
 - **HTTP**: Go stdlib `net/http`, `net/http/httputil.ReverseProxy`
 - **Database**: SQLite via `zombiezen.com/go/sqlite` (pure-Go, no CGO)
@@ -26,9 +26,10 @@ internal/emby/client.go         # Emby API client (net/http)
 internal/emby/models.go         # JSON request/response structs, error types
 internal/db/sqlite.go           # Database operations (zombiezen.com/go/sqlite)
 internal/middleware/proxy.go    # Trusted proxy IP check
-internal/middleware/auth.go     # Header extraction + user provisioning/auth
+internal/middleware/auth.go     # Header extraction + user provisioning/auth + session cache
 internal/handler/health.go      # Health check endpoint
 internal/handler/account.go     # Account page (html/template)
+internal/handler/autologin.go   # Credential injection into Emby web UI
 internal/handler/proxy.go       # Reverse proxy to Emby (httputil.ReverseProxy)
 internal/password/gen.go        # Password generation (crypto/rand)
 internal/integration/           # Integration tests
@@ -39,11 +40,11 @@ internal/integration/           # Integration tests
 **All development MUST happen inside Docker containers.** No Go toolchain, dependencies, or build tools will be installed on the host machine.
 
 - **Building**: `docker build -t emby-auth-bridge .`
-- **Running tests**: `docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...`
-- **Running vet**: `docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go vet ./...`
-- **Adding dependencies**: `docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go get <package>`
-- **Tidying modules**: `docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go mod tidy`
-- **Formatting**: `docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine gofmt -w .`
+- **Running tests**: `docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go test ./...`
+- **Running vet**: `docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go vet ./...`
+- **Adding dependencies**: `docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go get <package>`
+- **Tidying modules**: `docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go mod tidy`
+- **Formatting**: `docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine gofmt -w .`
 - **Running the app**: `docker compose up` (requires env vars configured)
 
 Do NOT run `go build`, `go test`, `go mod tidy`, or any Go commands directly on the host. Always wrap them in Docker.
@@ -54,7 +55,7 @@ Do NOT run `go build`, `go test`, `go mod tidy`, or any Go commands directly on 
 - **No external HTTP framework**: stdlib `net/http` is production-ready
 - **No retry logic**: Emby API calls are not retried — failures are logged and returned immediately
 - **Plaintext password storage**: Passwords are not security-critical (8-char alphanumeric for TV remotes)
-- **No session state**: Each request is self-contained; auth state comes from forwarded headers
+- **In-memory session cache**: 15-minute TTL per OIDC sub; evicted on logout or Emby 401
 - **Non-blocking side effects**: Profile image sync and policy updates run in goroutines
 
 ## Environment Variables
@@ -74,6 +75,8 @@ Do NOT run `go build`, `go test`, `go mod tidy`, or any Go commands directly on 
 |-------|--------|-----------|---------|
 | `/health` | GET | None | Health check (DB + Emby connectivity) |
 | `/account` | GET | TrustedProxy | Account page showing credentials |
+| `/{$}` | GET | TrustedProxy → Auth | Redirect to `/web/index.html` |
+| `/web/index.html` | GET | TrustedProxy → Auth | Emby page with injected credentials |
 | `/*` | ALL | TrustedProxy → Auth | Reverse proxy to Emby |
 
 ## Testing
@@ -81,7 +84,7 @@ Do NOT run `go build`, `go test`, `go mod tidy`, or any Go commands directly on 
 - **Unit tests**: Each package has `_test.go` files using Go stdlib `testing`
 - **Property-based tests**: `_property_test.go` files using `pgregory.net/rapid` (100 iterations minimum)
 - **Integration tests**: `internal/integration/` tests the full middleware chain
-- **Run all tests**: `docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...`
+- **Run all tests**: `docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go test ./...`
 - **Test databases**: Use in-memory SQLite (`file:testN?mode=memory&cache=shared`) with atomic counters for unique URIs
 
 ## Code Conventions
@@ -89,7 +92,9 @@ Do NOT run `go build`, `go test`, `go mod tidy`, or any Go commands directly on 
 - Error wrapping: `fmt.Errorf("operation: %w", err)`
 - Structured logging: `slog.Info/Warn/Error` with key-value pairs
 - Context propagation: Pass `context.Context` through all layers
-- Auth token sharing: `handler.WithAuthToken(ctx, token)` / `handler.AuthTokenFromContext(ctx)`
+- Auth token sharing: `handler.WithAuthSession(ctx, token, userID, serverID)` / `handler.AuthTokenFromContext(ctx)`
+- OIDC sub in context: `handler.WithAuthSub(ctx, sub)` / `handler.AuthSubFromContext(ctx)`
+- Session cache: In-memory `sync.Map` keyed by OIDC sub with 15-min TTL; evicted on 401 from Emby
 - Middleware pattern: `func(http.Handler) http.Handler`
 
 ## Development Workflow
@@ -119,7 +124,9 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 ## When Making Changes
 
 1. Make changes and write/update tests
-2. **Always run tests before committing**: `docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...`
-3. Run vet in Docker: `docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go vet ./...`
+2. **Always run tests before committing**: `docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go test ./...`
+3. Run vet in Docker: `docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go vet ./...`
 4. Verify Docker build: `docker build -t emby-auth-bridge .`
-5. Commit with conventional commit message
+5. Review `AGENT.md` and update if routes, files, design decisions, or conventions have changed
+6. Review `README.md` and update if user-facing behavior, features, routes, environment variables, or deployment instructions have changed
+7. Commit with conventional commit message

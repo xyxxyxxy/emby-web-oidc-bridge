@@ -34,7 +34,7 @@ type cachedSession struct {
 }
 
 // sessionCacheTTL is how long a cached session is valid before re-authentication.
-const sessionCacheTTL = 15 * time.Minute
+const sessionCacheTTL = 1 * time.Hour
 
 // clearSessionCache removes all entries from the session cache.
 // This is intended for use in tests to ensure isolation between test cases.
@@ -43,6 +43,13 @@ func clearSessionCache() {
 		sessionCache.Delete(key)
 		return true
 	})
+}
+
+// InvalidateSession removes the cached session for the given OIDC sub.
+// This should be called when Emby reports a session has ended (e.g. logout)
+// to prevent the bridge from reusing a stale/invalid access token.
+func InvalidateSession(sub string) {
+	sessionCache.Delete(sub)
 }
 
 // buildUserPolicy takes the template policy JSON and overrides IsDisabled and
@@ -291,6 +298,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			if cached, ok := sessionCache.Load(headers.Sub); ok {
 				session := cached.(*cachedSession)
 				if time.Now().Before(session.expiresAt) {
+					ctx = handler.WithAuthSub(ctx, headers.Sub)
 					ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
@@ -706,7 +714,8 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			}
 
 			// Non-blocking: enforce IsDisabled=false and EnableUserPreferenceAccess=false
-			// on the user's current policy (preserves admin-configured settings).
+			// on the user's current policy. Only updates if the values differ to avoid
+			// spamming Emby logs with unnecessary policy update notifications.
 			go func() {
 				bgCtx, bgCancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer bgCancel()
@@ -723,6 +732,15 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				if json.Unmarshal(currentPolicy, &policy) != nil {
 					return
 				}
+
+				// Check whether policy changes are actually needed.
+				isDisabled, _ := policy["IsDisabled"].(bool)
+				enablePrefAccess, _ := policy["EnableUserPreferenceAccess"].(bool)
+				if !isDisabled && !enablePrefAccess {
+					// Policy already matches desired state — skip update.
+					return
+				}
+
 				policy["IsDisabled"] = false
 				policy["EnableUserPreferenceAccess"] = false
 				updatedPolicy, marshalErr := json.Marshal(policy)
@@ -739,6 +757,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			}()
 
 			// Store auth session in context for downstream handlers.
+			ctx = handler.WithAuthSub(ctx, headers.Sub)
 			ctx = handler.WithAuthSession(ctx, authResult.AccessToken, authResult.User.ID, authResult.ServerID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

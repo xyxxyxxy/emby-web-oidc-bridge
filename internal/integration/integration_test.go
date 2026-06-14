@@ -32,7 +32,7 @@ type apiCall struct {
 
 func buildFullChain(trustedCIDRs []*net.IPNet, embyClient *emby.Client, database *db.DB, templateUserID string, backendURL string) http.Handler {
 	templatePolicy := []byte(`{"IsDisabled":true,"IsHidden":true,"EnableUserPreferenceAccess":true}`)
-	proxyHandler := handler.Proxy(backendURL)
+	proxyHandler := handler.Proxy(backendURL, middleware.InvalidateSession)
 	authMiddleware := middleware.Auth(embyClient, database, templateUserID, templatePolicy, "")
 	trustedProxyMiddleware := middleware.TrustedProxy(trustedCIDRs)
 
