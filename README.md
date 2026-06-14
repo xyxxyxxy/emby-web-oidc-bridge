@@ -40,6 +40,7 @@ Users are automatically provisioned on first login with settings copied from a c
 - Seamless web login (no username/password entry)
 - Template-based user creation (inherit permissions from a configured user)
 - Profile image sync from OIDC claims
+- Session cache with automatic invalidation on logout or user deletion
 - Account page showing credentials for TV/mobile apps
 - Trusted proxy IP validation
 - Single static binary (~10MB Docker image)
@@ -58,7 +59,7 @@ The bridge enforces minimal policy overrides to function correctly, while leavin
 
 **On user creation:** The template user's full policy is applied (library access, parental controls, IsHidden, etc.).
 
-**On every login:** The bridge fetches the user's current policy from Emby and only enforces two fields:
+**On every login:** The bridge fetches the user's current policy from Emby and only enforces two fields if they differ from the expected values (skipping unnecessary API calls):
 
 | Policy Field | Enforced Value | Reason |
 |-------------|-------|--------|
@@ -161,6 +162,8 @@ Both deployment modes support profile image sync when configured correctly. Your
 |-------|---------|
 | `/health` | Health check (DB + Emby connectivity) |
 | `/account` | Shows generated credentials for TV/mobile apps |
+| `/web/index.html` | Emby web UI with injected credentials |
+| `POST /Sessions/Logout` | Intercepts Emby logout, evicts session cache, redirects to re-auth |
 | `/*` | Reverse proxy to Emby (after auth) |
 
 ## Building
@@ -177,10 +180,10 @@ All development happens inside Docker — no Go toolchain required on the host.
 
 ```bash
 # Run tests
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go test ./...
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go test ./...
 
 # Run vet
-docker run --rm -v $(pwd):/app -w /app golang:1.23-alpine go vet ./...
+docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go vet ./...
 
 # Build locally
 docker build -t emby-auth-bridge .

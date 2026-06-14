@@ -130,4 +130,5 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 3. Run vet in Docker: `docker run --rm -v $(pwd):/app -w /app golang:1.24-alpine go vet ./...`
 4. Verify Docker build: `docker build -t emby-auth-bridge .`
 5. Review `AGENT.md` and update if routes, files, design decisions, or conventions have changed
-6. Commit with conventional commit message
+6. Review `README.md` and update if user-facing behavior, features, routes, environment variables, or deployment instructions have changed
+7. Commit with conventional commit message
