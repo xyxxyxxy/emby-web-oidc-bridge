@@ -60,31 +60,52 @@ const credentialScriptTemplate = `<script>
     var serverId = %s;
     var userId = %s;
     var accessToken = %s;
-    var existing = {};
-    try { existing = JSON.parse(localStorage.getItem("servercredentials3")) || {}; } catch(e) {}
-    var servers = (existing.Servers || []);
-    var server = null;
-    for (var i = 0; i < servers.length; i++) {
-        if (servers[i].Id === serverId) { server = servers[i]; break; }
+
+    function setCredentials() {
+        var existing = {};
+        try { existing = JSON.parse(localStorage.getItem("servercredentials3")) || {}; } catch(e) {}
+        var servers = (existing.Servers || []);
+        var server = null;
+        for (var i = 0; i < servers.length; i++) {
+            if (servers[i].Id === serverId) { server = servers[i]; break; }
+        }
+        if (!server) { server = {"Id": serverId, "Type": "Server"}; servers.push(server); }
+        var origin = window.location.origin;
+        server.ManualAddress = origin;
+        server.ManualAddressOnly = true;
+        server.Name = "Emby";
+        server.UserId = userId;
+        server.DateLastAccessed = Date.now();
+        server.LastConnectionMode = 2;
+        server.Users = [{"UserId": userId, "AccessToken": accessToken}];
+        existing.Servers = servers;
+        localStorage.setItem("servercredentials3", JSON.stringify(existing));
     }
-    if (!server) { server = {"Id": serverId, "Type": "Server"}; servers.push(server); }
-    var origin = window.location.origin;
-    server.ManualAddress = origin;
-    server.ManualAddressOnly = true;
-    server.Name = "Emby";
-    server.UserId = userId;
-    server.DateLastAccessed = Date.now();
-    server.LastConnectionMode = 2;
-    server.Users = [{"UserId": userId, "AccessToken": accessToken}];
-    existing.Servers = servers;
-    localStorage.setItem("servercredentials3", JSON.stringify(existing));
+
+    setCredentials();
+
+    function isLoginHash(h) {
+        return h.indexOf("manuallogin") !== -1 || h.indexOf("selectserver") !== -1 ||
+               h.indexOf("login") !== -1 || h.indexOf("startup") !== -1;
+    }
 
     var hash = window.location.hash || "";
-    if (hash.indexOf("manuallogin") !== -1 || hash.indexOf("selectserver") !== -1 || hash.indexOf("login") !== -1 || hash.indexOf("startup") !== -1) {
+    if (isLoginHash(hash)) {
         history.replaceState(null, "", "/web/index.html");
         window.location.reload();
         return;
     }
+
+    // Guard against Emby JS navigating to login pages after initialization.
+    // Re-inject credentials and redirect if Emby tries to show a login screen.
+    window.addEventListener("hashchange", function() {
+        var newHash = window.location.hash || "";
+        if (isLoginHash(newHash)) {
+            setCredentials();
+            history.replaceState(null, "", "/web/index.html");
+            window.location.reload();
+        }
+    });
 })();
 </script>`
 
