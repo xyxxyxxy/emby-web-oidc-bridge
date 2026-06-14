@@ -30,7 +30,6 @@ internal/middleware/auth.go     # Header extraction + user provisioning/auth + s
 internal/handler/health.go      # Health check endpoint
 internal/handler/account.go     # Account page (html/template)
 internal/handler/autologin.go   # Credential injection into Emby web UI
-internal/handler/logout.go      # Logout interception (evicts session cache, redirects)
 internal/handler/proxy.go       # Reverse proxy to Emby (httputil.ReverseProxy)
 internal/password/gen.go        # Password generation (crypto/rand)
 internal/integration/           # Integration tests
@@ -78,7 +77,6 @@ Do NOT run `go build`, `go test`, `go mod tidy`, or any Go commands directly on 
 | `/account` | GET | TrustedProxy | Account page showing credentials |
 | `/{$}` | GET | TrustedProxy → Auth | Redirect to `/web/index.html` |
 | `/web/index.html` | GET | TrustedProxy → Auth | Emby page with injected credentials |
-| `/Sessions/Logout` | POST | TrustedProxy | Evict session cache, redirect to `/` |
 | `/*` | ALL | TrustedProxy → Auth | Reverse proxy to Emby |
 
 ## Testing
@@ -96,7 +94,7 @@ Do NOT run `go build`, `go test`, `go mod tidy`, or any Go commands directly on 
 - Context propagation: Pass `context.Context` through all layers
 - Auth token sharing: `handler.WithAuthSession(ctx, token, userID, serverID)` / `handler.AuthTokenFromContext(ctx)`
 - OIDC sub in context: `handler.WithAuthSub(ctx, sub)` / `handler.AuthSubFromContext(ctx)`
-- Session cache: In-memory `sync.Map` keyed by OIDC sub with 15-min TTL; evicted on logout or 401 from Emby
+- Session cache: In-memory `sync.Map` keyed by OIDC sub with 15-min TTL; evicted on 401 from Emby
 - Middleware pattern: `func(http.Handler) http.Handler`
 
 ## Development Workflow

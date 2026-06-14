@@ -40,7 +40,8 @@ Users are automatically provisioned on first login with settings copied from a c
 - Seamless web login (no username/password entry)
 - Template-based user creation (inherit permissions from a configured user)
 - Profile image sync from OIDC claims
-- Session cache with automatic invalidation on logout or user deletion
+- Session cache with automatic invalidation on user deletion (401 detection)
+- Logout button hidden from Emby UI (access revocation via OIDC provider)
 - Account page showing credentials for TV/mobile apps
 - Trusted proxy IP validation
 - Single static binary (~10MB Docker image)
@@ -163,7 +164,6 @@ Both deployment modes support profile image sync when configured correctly. Your
 | `/health` | Health check (DB + Emby connectivity) |
 | `/account` | Shows generated credentials for TV/mobile apps |
 | `/web/index.html` | Emby web UI with injected credentials |
-| `POST /Sessions/Logout` | Intercepts Emby logout, evicts session cache, redirects to re-auth |
 | `/*` | Reverse proxy to Emby (after auth) |
 
 ## Building
