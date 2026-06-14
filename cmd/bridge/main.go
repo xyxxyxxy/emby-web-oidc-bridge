@@ -86,7 +86,7 @@ func main() {
 	auth := middleware.Auth(embyClient, database, templateUser.ID, templatePolicy, cfg.OIDCIssuerURL)
 
 	// Create proxy handler.
-	proxyHandler := handler.Proxy(cfg.EmbyAPIURL)
+	proxyHandler := handler.Proxy(cfg.EmbyAPIURL, middleware.InvalidateSession)
 
 	// Register routes.
 	mux := http.NewServeMux()
@@ -104,6 +104,10 @@ func main() {
 
 	// /web/index.html — fetch real Emby page, inject credentials inline.
 	mux.Handle("GET /web/index.html", trustedProxy(auth(http.HandlerFunc(handler.InjectCredentials(cfg.EmbyAPIURL)))))
+
+	// /Sessions/Logout — intercept Emby logout to evict cached session and redirect.
+	// This prevents the bridge from serving a stale token after the user signs out.
+	mux.Handle("POST /Sessions/Logout", trustedProxy(http.HandlerFunc(handler.Logout(handler.ExtractSubFromRequest, middleware.InvalidateSession))))
 
 	// /* — full middleware chain: trustedProxy → auth → proxy.
 	mux.Handle("/", trustedProxy(auth(proxyHandler)))

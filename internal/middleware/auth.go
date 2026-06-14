@@ -45,6 +45,13 @@ func clearSessionCache() {
 	})
 }
 
+// InvalidateSession removes the cached session for the given OIDC sub.
+// This should be called when Emby reports a session has ended (e.g. logout)
+// to prevent the bridge from reusing a stale/invalid access token.
+func InvalidateSession(sub string) {
+	sessionCache.Delete(sub)
+}
+
 // buildUserPolicy takes the template policy JSON and overrides IsDisabled and
 // EnableUserPreferenceAccess, preserving all other fields from the template.
 func buildUserPolicy(templatePolicy []byte) ([]byte, error) {
@@ -291,6 +298,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			if cached, ok := sessionCache.Load(headers.Sub); ok {
 				session := cached.(*cachedSession)
 				if time.Now().Before(session.expiresAt) {
+					ctx = handler.WithAuthSub(ctx, headers.Sub)
 					ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
@@ -749,6 +757,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			}()
 
 			// Store auth session in context for downstream handlers.
+			ctx = handler.WithAuthSub(ctx, headers.Sub)
 			ctx = handler.WithAuthSession(ctx, authResult.AccessToken, authResult.User.ID, authResult.ServerID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

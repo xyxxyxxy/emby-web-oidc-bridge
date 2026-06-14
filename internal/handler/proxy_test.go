@@ -20,7 +20,7 @@ func TestProxy_ForwardsRequestToEmby(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	proxy := handler.Proxy(backend.URL)
+	proxy := handler.Proxy(backend.URL, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/some/path?key=value", nil)
 	rec := httptest.NewRecorder()
@@ -49,7 +49,7 @@ func TestProxy_PreservesRequestHeaders(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	proxy := handler.Proxy(backend.URL)
+	proxy := handler.Proxy(backend.URL, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	req.Header.Set("X-Custom-Header", "custom-value")
@@ -75,7 +75,7 @@ func TestProxy_PreservesRequestBody(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	proxy := handler.Proxy(backend.URL)
+	proxy := handler.Proxy(backend.URL, nil)
 
 	bodyContent := `{"username":"test@example.com","password":"abc12345"}`
 	req := httptest.NewRequest(http.MethodPost, "/Users/AuthenticateByName", strings.NewReader(bodyContent))
@@ -97,7 +97,7 @@ func TestProxy_ForwardsAuthTokenFromContext(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	proxy := handler.Proxy(backend.URL)
+	proxy := handler.Proxy(backend.URL, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/Items", nil)
 	ctx := handler.WithAuthToken(req.Context(), "test-access-token-123")
@@ -119,7 +119,7 @@ func TestProxy_NoTokenWhenContextEmpty(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	proxy := handler.Proxy(backend.URL)
+	proxy := handler.Proxy(backend.URL, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/Items", nil)
 	rec := httptest.NewRecorder()
@@ -132,7 +132,7 @@ func TestProxy_NoTokenWhenContextEmpty(t *testing.T) {
 }
 
 func TestProxy_InvalidURL(t *testing.T) {
-	proxy := handler.Proxy("://invalid-url")
+	proxy := handler.Proxy("://invalid-url", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	rec := httptest.NewRecorder()
@@ -153,7 +153,7 @@ func TestProxy_WithPathPrefix(t *testing.T) {
 	defer backend.Close()
 
 	// Emby is often at a path like /emby
-	proxy := handler.Proxy(backend.URL + "/emby")
+	proxy := handler.Proxy(backend.URL+"/emby", nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/Items/123", nil)
 	rec := httptest.NewRecorder()
@@ -177,5 +177,135 @@ func TestWithAuthToken_And_AuthTokenFromContext(t *testing.T) {
 	ctx = handler.WithAuthToken(ctx, "my-token")
 	if got := handler.AuthTokenFromContext(ctx); got != "my-token" {
 		t.Fatalf("expected 'my-token', got %q", got)
+	}
+}
+
+func TestProxy_401ResponseEvictsSession(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate Emby rejecting an invalid/expired token.
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer backend.Close()
+
+	var invalidatedSub string
+	invalidate := func(sub string) {
+		invalidatedSub = sub
+	}
+
+	proxy := handler.Proxy(backend.URL, invalidate)
+
+	req := httptest.NewRequest(http.MethodGet, "/Items", nil)
+	ctx := handler.WithAuthSub(req.Context(), "sub-deleted-user")
+	ctx = handler.WithAuthToken(ctx, "stale-token")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+
+	// The 401 should still be returned to the client.
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+
+	// The invalidate callback should have been called with the correct sub.
+	if invalidatedSub != "sub-deleted-user" {
+		t.Errorf("expected invalidated sub %q, got %q", "sub-deleted-user", invalidatedSub)
+	}
+}
+
+func TestProxy_401WithoutSubDoesNotPanic(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer backend.Close()
+
+	var invalidateCalled bool
+	invalidate := func(sub string) {
+		invalidateCalled = true
+	}
+
+	proxy := handler.Proxy(backend.URL, invalidate)
+
+	// Request without sub in context.
+	req := httptest.NewRequest(http.MethodGet, "/Items", nil)
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+
+	// Should not call invalidate when sub is empty.
+	if invalidateCalled {
+		t.Error("invalidateSession should not be called when sub is empty in context")
+	}
+}
+
+func TestProxy_NonUnauthorizedDoesNotEvict(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden) // 403, not 401.
+	}))
+	defer backend.Close()
+
+	var invalidateCalled bool
+	invalidate := func(sub string) {
+		invalidateCalled = true
+	}
+
+	proxy := handler.Proxy(backend.URL, invalidate)
+
+	req := httptest.NewRequest(http.MethodGet, "/Items", nil)
+	ctx := handler.WithAuthSub(req.Context(), "sub-some-user")
+	ctx = handler.WithAuthToken(ctx, "some-token")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
+	}
+
+	// 403 should NOT trigger session invalidation.
+	if invalidateCalled {
+		t.Error("invalidateSession should not be called for non-401 responses")
+	}
+}
+
+func TestProxy_NilInvalidateDoesNotPanicOn401(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer backend.Close()
+
+	// Pass nil invalidateSession — should not panic.
+	proxy := handler.Proxy(backend.URL, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/Items", nil)
+	ctx := handler.WithAuthSub(req.Context(), "sub-nil-test")
+	ctx = handler.WithAuthToken(ctx, "some-token")
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestWithAuthSub_And_AuthSubFromContext(t *testing.T) {
+	ctx := context.Background()
+
+	// No sub set.
+	if got := handler.AuthSubFromContext(ctx); got != "" {
+		t.Fatalf("expected empty sub from empty context, got %q", got)
+	}
+
+	// Set sub.
+	ctx = handler.WithAuthSub(ctx, "my-oidc-sub")
+	if got := handler.AuthSubFromContext(ctx); got != "my-oidc-sub" {
+		t.Fatalf("expected 'my-oidc-sub', got %q", got)
 	}
 }

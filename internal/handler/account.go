@@ -42,8 +42,8 @@ const accountPageTemplate = `<!DOCTYPE html>
 
 var accountTmpl = template.Must(template.New("account").Parse(accountPageTemplate))
 
-// extractSubFromRequest extracts the OIDC sub claim from request headers or JWT.
-func extractSubFromRequest(r *http.Request) string {
+// ExtractSubFromRequest extracts the OIDC sub claim from request headers or JWT.
+func ExtractSubFromRequest(r *http.Request) string {
 	// Try explicit sub headers first.
 	sub := r.Header.Get("X-Forwarded-Sub")
 	if sub == "" {
@@ -97,7 +97,7 @@ func extractSubFromRequest(r *http.Request) string {
 // Renders an HTML page showing the user's Emby username and password.
 func Account(database *db.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		sub := extractSubFromRequest(r)
+		sub := ExtractSubFromRequest(r)
 		if sub == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
