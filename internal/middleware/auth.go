@@ -34,7 +34,7 @@ type cachedSession struct {
 }
 
 // sessionCacheTTL is how long a cached session is valid before re-authentication.
-const sessionCacheTTL = 15 * time.Minute
+const sessionCacheTTL = 1 * time.Hour
 
 // clearSessionCache removes all entries from the session cache.
 // This is intended for use in tests to ensure isolation between test cases.
