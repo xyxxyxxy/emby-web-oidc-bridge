@@ -185,3 +185,68 @@ func TestWatchpartyProxyResponsePassthrough(t *testing.T) {
 		}
 	})
 }
+
+// TestWatchpartySetUsernameEmptyUsername verifies that when no username is in
+// context, the handler redirects to /watchparty/?u=1 without serving the
+// localStorage-setting page.
+func TestWatchpartySetUsernameEmptyUsername(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/watchparty/", nil)
+	// No username in context.
+
+	rec := httptest.NewRecorder()
+	handler.WatchpartySetUsername()(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected 302 redirect, got %d", resp.StatusCode)
+		return
+	}
+
+	location := resp.Header.Get("Location")
+	if location != "/watchparty/?u=1" {
+		t.Fatalf("expected redirect to /watchparty/?u=1, got %q", location)
+	}
+}
+
+// TestWatchpartyProxyInvalidBackendURL verifies that WatchpartyProxy returns
+// 500 when given an unparseable backend URL.
+func TestWatchpartyProxyInvalidBackendURL(t *testing.T) {
+	proxyHandler := handler.WatchpartyProxy("://not-a-url")
+
+	req := httptest.NewRequest(http.MethodGet, "/watchparty/test", nil)
+	rec := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", resp.StatusCode)
+	}
+}
+
+// TestWatchpartyProxyBackendUnreachable verifies that the proxy returns 502
+// when the backend is not reachable.
+func TestWatchpartyProxyBackendUnreachable(t *testing.T) {
+	// Use a URL that will fail to connect (closed port).
+	proxyHandler := handler.WatchpartyProxy("http://127.0.0.1:1")
+
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := handler.WithAuthUsername(r.Context(), "testuser")
+		proxyHandler.ServeHTTP(w, r.WithContext(ctx))
+	}))
+	defer proxy.Close()
+
+	resp, err := http.Get(proxy.URL + "/watchparty/test")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", resp.StatusCode)
+	}
+}
