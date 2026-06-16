@@ -89,7 +89,7 @@ volumes:
 | `BRIDGE_PORT` | No | `8080` | Port the bridge listens on |
 | `DATABASE_PATH` | No | `/data/users.db` | Path to the SQLite database file |
 | `OIDC_ISSUER_URL` | No | — | OIDC issuer URL (enables profile image sync via userinfo/JWT) |
-| `EMBY_WATCHPARTY_URL` | No | — | Internal URL of the [emby-watchparty](https://github.com/Oratorian/emby-watchparty) service (e.g., `http://emby-watchparty:3000`). Enables the `/watchparty/` route when set. |
+| `EMBY_WATCHPARTY_URL` | No | — | Internal URL of the [emby-watchparty](https://github.com/Oratorian/emby-watchparty) service (e.g., `http://emby-watchparty:5000`). Enables the `/watchparty/` route when set. |
 
 ## oauth2-proxy Configuration
 

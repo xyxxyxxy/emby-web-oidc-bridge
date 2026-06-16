@@ -10,7 +10,7 @@ services:
       TEMPLATE_USER_NAME: ${TEMPLATE_USER_NAME:-template}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES}
       DATABASE_PATH: /data/users.db
-      # EMBY_WATCHPARTY_URL: http://emby-watchparty:3000
+      # EMBY_WATCHPARTY_URL: http://emby-watchparty:5000
     volumes:
       - bridge-data:/data
     ports:
