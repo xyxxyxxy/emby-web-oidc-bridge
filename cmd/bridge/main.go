@@ -34,6 +34,7 @@ func main() {
 		"emby_api_url", cfg.EmbyAPIURL,
 		"database_path", cfg.DatabasePath,
 		"template_user_name", cfg.TemplateUserName,
+		"watchparty_url", cfg.WatchpartyURL,
 	)
 
 	// Open database.
@@ -104,6 +105,18 @@ func main() {
 
 	// /web/index.html — fetch real Emby page, inject credentials inline.
 	mux.Handle("GET /web/index.html", trustedProxy(auth(http.HandlerFunc(handler.InjectCredentials(cfg.EmbyAPIURL)))))
+
+	// /watchparty/ — optional watchparty reverse proxy (must be before catch-all /).
+	if cfg.WatchpartyEnabled() {
+		watchpartyHandler := handler.WatchpartyProxy(cfg.WatchpartyURL)
+		mux.Handle("/watchparty/", trustedProxy(auth(watchpartyHandler)))
+	}
+
+	if cfg.WatchpartyEnabled() {
+		slog.Info("watchparty feature enabled", "watchparty_url", cfg.WatchpartyURL)
+	} else {
+		slog.Info("watchparty feature disabled")
+	}
 
 	// /* — full middleware chain: trustedProxy → auth → proxy.
 	mux.Handle("/", trustedProxy(auth(proxyHandler)))

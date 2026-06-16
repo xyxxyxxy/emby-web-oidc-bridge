@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -19,6 +20,12 @@ type Config struct {
 	BridgePort       int          // BRIDGE_PORT (default: 8080)
 	DatabasePath     string       // DATABASE_PATH (default: /data/users.db)
 	OIDCIssuerURL    string       // OIDC_ISSUER_URL (optional, for profile image sync)
+	WatchpartyURL    string       // EMBY_WATCHPARTY_URL (optional, enables watchparty feature)
+}
+
+// WatchpartyEnabled returns true if the watchparty feature is enabled.
+func (c *Config) WatchpartyEnabled() bool {
+	return c.WatchpartyURL != ""
 }
 
 // Load reads configuration from environment variables.
@@ -65,6 +72,14 @@ func Load() (*Config, error) {
 
 	oidcIssuerURL := os.Getenv("OIDC_ISSUER_URL")
 
+	watchpartyURL := strings.TrimSpace(os.Getenv("EMBY_WATCHPARTY_URL"))
+	if watchpartyURL != "" {
+		u, err := url.Parse(watchpartyURL)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return nil, fmt.Errorf("EMBY_WATCHPARTY_URL: invalid URL: %s", watchpartyURL)
+		}
+	}
+
 	return &Config{
 		EmbyAPIURL:       embyAPIURL,
 		EmbyAPIKey:       embyAPIKey,
@@ -73,6 +88,7 @@ func Load() (*Config, error) {
 		BridgePort:       bridgePort,
 		DatabasePath:     databasePath,
 		OIDCIssuerURL:    oidcIssuerURL,
+		WatchpartyURL:    watchpartyURL,
 	}, nil
 }
 
