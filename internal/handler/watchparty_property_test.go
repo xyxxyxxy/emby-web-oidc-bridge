@@ -3,7 +3,6 @@ package handler_test
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +41,6 @@ func TestWatchpartyProxyPathPreservation(t *testing.T) {
 
 		// Create a test server wrapping the proxy.
 		proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Set a username in context (required by the handler).
 			ctx := handler.WithAuthUsername(r.Context(), "testuser")
 			proxyHandler.ServeHTTP(w, r.WithContext(ctx))
 		}))
@@ -63,11 +61,11 @@ func TestWatchpartyProxyPathPreservation(t *testing.T) {
 	})
 }
 
-// Feature: emby-watchparty-support, Property 4: HTML response username injection with safe encoding
+// Feature: emby-watchparty-support, Property 4: Username redirect page sets localStorage with safe encoding
 // **Validates: Requirements 3.1, 3.3**
-func TestHTMLUsernameInjectionWithSafeEncoding(t *testing.T) {
-	// scriptRe extracts the JSON-encoded value from the injected localStorage script.
-	scriptRe := regexp.MustCompile(`<script>localStorage\.setItem\('emby-watchparty-username', (.+?)\);</script>`)
+func TestWatchpartyUsernamePageSafeEncoding(t *testing.T) {
+	// scriptRe extracts the JSON-encoded value from the localStorage script in the redirect page.
+	scriptRe := regexp.MustCompile(`localStorage\.setItem\('emby-watchparty-username', (.+?)\);`)
 
 	rapid.Check(t, func(t *rapid.T) {
 		// Generate a random username with special characters: quotes, backslashes,
@@ -77,48 +75,32 @@ func TestHTMLUsernameInjectionWithSafeEncoding(t *testing.T) {
 			rapid.StringMatching(`[\"\\<>/\x00-\x1f\x{1f600}-\x{1f64f}]+`),
 		).Draw(t, "username")
 
-		// Skip empty usernames since the handler skips injection for them.
+		// Skip empty usernames since the handler redirects without setting for them.
 		if username == "" {
 			return
 		}
 
-		// Generate a random HTML body containing a <head> tag.
-		headContent := rapid.StringMatching(`[a-zA-Z0-9 <>/="'-]{0,50}`).Draw(t, "headContent")
-		bodyContent := rapid.StringMatching(`[a-zA-Z0-9 <>/="'-]{0,100}`).Draw(t, "bodyContent")
-		htmlBody := fmt.Sprintf("<html><head>%s</head><body>%s</body></html>", headContent, bodyContent)
-
-		// Create a mock backend that returns the generated HTML.
-		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write([]byte(htmlBody))
-		}))
-		defer backend.Close()
-
-		// Create the watchparty proxy handler.
-		proxyHandler := handler.WatchpartyProxy(backend.URL)
-
-		// Create a request with the username set in context.
+		// Create a request to /watchparty/ (without ?u=1) with the username in context.
 		req := httptest.NewRequest(http.MethodGet, "/watchparty/", nil)
 		ctx := handler.WithAuthUsername(req.Context(), username)
 		req = req.WithContext(ctx)
 
-		// Record the response.
 		rec := httptest.NewRecorder()
-		proxyHandler.ServeHTTP(rec, req)
+		handler.WatchpartySetUsername()(rec, req)
 
 		resp := rec.Result()
 		defer func() { _ = resp.Body.Close() }()
 
-		respBody, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatalf("failed to read response body: %v", err)
 			return
 		}
 
-		// Verify the script tag is present in the response.
-		matches := scriptRe.FindSubmatch(respBody)
+		// Verify the script contains the localStorage.setItem call.
+		matches := scriptRe.FindSubmatch(body)
 		if matches == nil {
-			t.Fatalf("injected script not found in response body:\n%s", string(respBody))
+			t.Fatalf("localStorage.setItem not found in response body:\n%s", string(body))
 			return
 		}
 
@@ -134,40 +116,44 @@ func TestHTMLUsernameInjectionWithSafeEncoding(t *testing.T) {
 		if decoded != username {
 			t.Fatalf("decoded username %q does not match original %q", decoded, username)
 		}
+
+		// Verify the page contains a redirect to /watchparty/?u=1
+		if !strings.Contains(string(body), "/watchparty/?u=1") {
+			t.Fatalf("redirect to /watchparty/?u=1 not found in response body")
+		}
 	})
 }
 
-// Feature: emby-watchparty-support, Property 6: Non-HTML response passthrough
+// Feature: emby-watchparty-support, Property 6: Proxy response passthrough (no modification)
 // **Validates: Requirements 3.4**
-func TestNonHTMLResponsePassthrough(t *testing.T) {
-	nonHTMLContentTypes := []string{
+func TestWatchpartyProxyResponsePassthrough(t *testing.T) {
+	contentTypes := []string{
 		"application/json",
 		"text/css",
 		"text/plain",
+		"text/html",
+		"text/html; charset=utf-8",
 		"image/png",
 		"application/javascript",
 		"application/octet-stream",
-		"text/xml",
-		"image/jpeg",
-		"application/pdf",
 	}
 
 	rapid.Check(t, func(t *rapid.T) {
-		// Pick a random non-HTML content type.
-		contentType := rapid.SampledFrom(nonHTMLContentTypes).Draw(t, "contentType")
+		// Pick a random content type (including text/html — proxy should NOT modify).
+		contentType := rapid.SampledFrom(contentTypes).Draw(t, "contentType")
 
 		// Generate a random response body (binary-safe).
 		bodyLen := rapid.IntRange(1, 4096).Draw(t, "bodyLen")
 		body := rapid.SliceOfN(rapid.Byte(), bodyLen, bodyLen).Draw(t, "body")
 
-		// Create a mock backend that returns the random body with the random content type.
+		// Create a mock backend that returns the random body.
 		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", contentType)
 			_, _ = w.Write(body)
 		}))
 		defer backend.Close()
 
-		// Create the watchparty proxy handler targeting the mock backend.
+		// Create the watchparty proxy handler.
 		proxyHandler := handler.WatchpartyProxy(backend.URL)
 
 		// Create a test server wrapping the proxy.
@@ -192,9 +178,10 @@ func TestNonHTMLResponsePassthrough(t *testing.T) {
 			return
 		}
 
-		// Verify the response body is byte-for-byte identical (no script injection).
+		// Verify the response body is byte-for-byte identical (no modification).
 		if !bytes.Equal(received, body) {
-			t.Fatalf("body mismatch: expected %d bytes, got %d bytes", len(body), len(received))
+			t.Fatalf("body mismatch for content-type %q: expected %d bytes, got %d bytes",
+				contentType, len(body), len(received))
 		}
 	})
 }

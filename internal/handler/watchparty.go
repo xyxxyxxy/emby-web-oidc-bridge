@@ -1,24 +1,56 @@
 package handler
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"regexp"
-	"strings"
 )
 
-// headTagRe matches an opening <head> or <head ...> tag (case-insensitive).
-var headTagRe = regexp.MustCompile(`(?i)<head(\s[^>]*)?>`)
+const watchpartyUsernameTemplate = `<!DOCTYPE html>
+<html>
+<head><title>Joining watchparty...</title></head>
+<body>
+<script>
+localStorage.setItem('emby-watchparty-username', %s);
+window.location.replace('/watchparty/?u=1');
+</script>
+<noscript><p>JavaScript is required. <a href="/watchparty/?u=1">Continue to Watchparty</a></p></noscript>
+</body>
+</html>`
+
+// WatchpartySetUsername returns an http.HandlerFunc that serves a small page
+// which sets the authenticated user's display name in localStorage and then
+// redirects to the actual watchparty UI. This avoids modifying proxied
+// responses and keeps the proxy layer simple.
+func WatchpartySetUsername() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// If ?u=1 is present, the username has already been set — proxy through
+		// to the watchparty backend by letting the next handler in the mux take over.
+		// This case is handled by route registration order in main.go, so this
+		// handler only receives requests without ?u=1.
+
+		username := AuthUsernameFromContext(r.Context())
+		if username == "" {
+			slog.Warn("watchparty: no username in context, redirecting without setting")
+			http.Redirect(w, r, "/watchparty/?u=1", http.StatusFound)
+			return
+		}
+
+		encoded := jsStringEncode(username)
+		page := fmt.Sprintf(watchpartyUsernameTemplate, encoded)
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte(page))
+	}
+}
 
 // WatchpartyProxy returns an http.Handler that reverse-proxies requests to the
-// configured watchparty backend. For HTML responses, it injects a script that
-// sets the user's display name in localStorage so users are automatically
-// identified in watch sessions.
+// configured watchparty backend. It does not modify responses — username
+// injection is handled by the separate WatchpartySetUsername handler on the
+// initial page load.
 func WatchpartyProxy(backendURL string) http.Handler {
 	target, err := url.Parse(backendURL)
 	if err != nil {
@@ -35,47 +67,6 @@ func WatchpartyProxy(backendURL string) http.Handler {
 			req.Host = target.Host
 			// Preserve the request path unchanged — the watchparty service
 			// expects the /watchparty/ prefix via APP_PREFIX configuration.
-		},
-		ModifyResponse: func(resp *http.Response) error {
-			contentType := resp.Header.Get("Content-Type")
-			if !strings.Contains(contentType, "text/html") {
-				return nil
-			}
-
-			username := AuthUsernameFromContext(resp.Request.Context())
-			if username == "" {
-				return nil
-			}
-
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				return err
-			}
-			_ = resp.Body.Close()
-
-			encoded := jsStringEncode(username)
-			script := fmt.Sprintf(`<script>localStorage.setItem('emby-watchparty-username', %s);</script>`, encoded)
-
-			loc := headTagRe.FindIndex(body)
-			if loc == nil {
-				slog.Warn("watchparty: <head> tag not found in HTML response, skipping injection",
-					"path", resp.Request.URL.Path,
-				)
-				resp.Body = io.NopCloser(bytes.NewReader(body))
-				return nil
-			}
-
-			// Inject the script right after the matched <head...> tag.
-			var modified []byte
-			modified = append(modified, body[:loc[1]]...)
-			modified = append(modified, []byte(script)...)
-			modified = append(modified, body[loc[1]:]...)
-
-			resp.Body = io.NopCloser(bytes.NewReader(modified))
-			resp.ContentLength = int64(len(modified))
-			resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(modified)))
-
-			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			slog.Error("watchparty: backend error",

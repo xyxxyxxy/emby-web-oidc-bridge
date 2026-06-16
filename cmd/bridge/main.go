@@ -106,10 +106,19 @@ func main() {
 	// /web/index.html — fetch real Emby page, inject credentials inline.
 	mux.Handle("GET /web/index.html", trustedProxy(auth(http.HandlerFunc(handler.InjectCredentials(cfg.EmbyAPIURL)))))
 
-	// /watchparty/ — optional watchparty reverse proxy (must be before catch-all /).
+	// /watchparty/ — optional watchparty integration.
+	// GET /watchparty/ without ?u=1 serves a page that sets the username in
+	// localStorage and redirects. All other /watchparty/ requests are proxied.
 	if cfg.WatchpartyEnabled() {
-		watchpartyHandler := handler.WatchpartyProxy(cfg.WatchpartyURL)
-		mux.Handle("/watchparty/", trustedProxy(auth(watchpartyHandler)))
+		watchpartyProxy := handler.WatchpartyProxy(cfg.WatchpartyURL)
+		mux.Handle("/watchparty/", trustedProxy(auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// If this is the exact root path without the "u" param, serve the username page.
+			if r.URL.Path == "/watchparty/" && r.URL.Query().Get("u") == "" {
+				handler.WatchpartySetUsername()(w, r)
+				return
+			}
+			watchpartyProxy.ServeHTTP(w, r)
+		}))))
 	}
 
 	if cfg.WatchpartyEnabled() {
