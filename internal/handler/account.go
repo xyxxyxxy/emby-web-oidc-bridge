@@ -22,7 +22,10 @@ const accountPageTemplate = `<!DOCTYPE html>
         h1 { color: #fff; }
         .credentials { background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin: 1rem 0; border: 1px solid #3a3a3a; }
         .credentials dt { font-weight: bold; margin-top: 1rem; color: #aaa; }
-        .credentials dd { margin: 0.25rem 0 0 0; font-family: monospace; font-size: 1.1rem; color: #fff; }
+        .credentials dd { margin: 0.25rem 0 0 0; font-family: monospace; font-size: 1.1rem; color: #fff; display: flex; align-items: center; gap: 0.5rem; }
+        .copy-btn { background: #3a3a3a; border: 1px solid #555; color: #ccc; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+        .copy-btn:hover { background: #4a4a4a; color: #fff; }
+        .copy-btn.copied { background: #2e7d32; border-color: #4caf50; color: #fff; }
         .note { color: #888; font-size: 0.9rem; margin-top: 1.5rem; }
     </style>
 </head>
@@ -31,12 +34,25 @@ const accountPageTemplate = `<!DOCTYPE html>
     <div class="credentials">
         <dl>
             <dt>Username</dt>
-            <dd>{{.Username}}</dd>
+            <dd><span id="username">{{.Username}}</span><button class="copy-btn" onclick="copyText('username', this)" aria-label="Copy username">Copy</button></dd>
             <dt>Password</dt>
-            <dd>{{.Password}}</dd>
+            <dd><span id="password">{{.Password}}</span><button class="copy-btn" onclick="copyText('password', this)" aria-label="Copy password">Copy</button></dd>
         </dl>
     </div>
     <p class="note">Use these credentials to sign in on Emby TV and mobile apps where OIDC login is not available.</p>
+    <script>
+    function copyText(id, btn) {
+        var text = document.getElementById(id).textContent;
+        navigator.clipboard.writeText(text).then(function() {
+            btn.textContent = 'Copied!';
+            btn.classList.add('copied');
+            setTimeout(function() {
+                btn.textContent = 'Copy';
+                btn.classList.remove('copied');
+            }, 2000);
+        });
+    }
+    </script>
 </body>
 </html>`
 
