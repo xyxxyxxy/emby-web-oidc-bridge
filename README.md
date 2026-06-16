@@ -122,7 +122,7 @@ volumes:
 | `BRIDGE_PORT` | No | `8080` | Port the bridge listens on |
 | `DATABASE_PATH` | No | `/data/users.db` | Path to the SQLite database file |
 | `OIDC_ISSUER_URL` | No | — | OIDC issuer URL (enables profile image sync via userinfo/JWT) |
-| `EMBY_WATCHPARTY_URL` | No | — | Internal URL of the [emby-watchparty](https://github.com/Oratorian/emby-watchparty) service (e.g., `http://watchparty:3000`). Enables the `/watchparty/` route when set. |
+| `EMBY_WATCHPARTY_URL` | No | — | Internal URL of the [emby-watchparty](https://github.com/Oratorian/emby-watchparty) service (e.g., `http://emby-watchparty:3000`). Enables the `/watchparty/` route when set. |
 
 ## oauth2-proxy Configuration
 
@@ -183,29 +183,14 @@ Both deployment modes support profile image sync when configured correctly. Your
 
 The bridge provides optional integration with [emby-watchparty](https://github.com/Oratorian/emby-watchparty), a synchronized watch-together service for Emby. This feature is disabled by default.
 
-When `EMBY_WATCHPARTY_URL` is set, the bridge serves the watchparty UI at `/watchparty/` and automatically injects the authenticated user's display name into `localStorage` under the key `emby-watchparty-username`. This means users are identified in watch sessions without any manual login step.
+When `EMBY_WATCHPARTY_URL` is set, the bridge serves the watchparty UI at `/watchparty/` and the authenticated user's display name is automatically applied when entering the watchparty through the bridge — no manual name entry required.
 
 ### Configuration
 
-The watchparty service must be configured with:
+The watchparty service (`emby-watchparty`) must be configured with:
 
 - `APP_PREFIX=/watchparty` — so the watchparty UI works correctly under the `/watchparty/` sub-path
 - `REQUIRE_LOGIN=false` — authentication is already handled by the bridge via the OIDC provider, so the watchparty service's own login must be disabled
-
-### Example
-
-```yaml
-services:
-  emby-bridge:
-    environment:
-      EMBY_WATCHPARTY_URL: http://watchparty:3000
-
-  watchparty:
-    image: ghcr.io/oratorian/emby-watchparty:latest
-    environment:
-      APP_PREFIX: /watchparty
-      REQUIRE_LOGIN: "false"
-```
 
 See `docker-compose.yml` for a commented-out example ready to enable.
 

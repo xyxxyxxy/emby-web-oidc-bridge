@@ -10,7 +10,7 @@ services:
       TEMPLATE_USER_NAME: ${TEMPLATE_USER_NAME:-template}
       TRUSTED_PROXIES: ${TRUSTED_PROXIES}
       DATABASE_PATH: /data/users.db
-      # EMBY_WATCHPARTY_URL: http://watchparty:3000
+      # EMBY_WATCHPARTY_URL: http://emby-watchparty:3000
     volumes:
       - bridge-data:/data
     ports:
@@ -18,7 +18,7 @@ services:
 
   # # Watchparty — synchronized watch-together service (optional).
   # # Uncomment this service and set EMBY_WATCHPARTY_URL above to enable.
-  # watchparty:
+  # emby-watchparty:
   #   image: ghcr.io/oratorian/emby-watchparty:latest
   #   environment:
   #     APP_PREFIX: /watchparty
