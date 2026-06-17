@@ -142,6 +142,7 @@ Both deployment modes support profile image sync when configured correctly. Your
 |-------|---------|
 | `/health` | Health check (DB + Emby connectivity) |
 | `/account` | Shows generated credentials for TV/mobile apps |
+| `/api/credentials` | Returns authenticated user's Emby credentials as JSON (internal API used by auto-login script and account page) |
 | `/web/index.html` | Emby web UI with injected credentials |
 | `/watchparty/*` | Reverse proxy to watchparty service (optional, enabled when `EMBY_WATCHPARTY_URL` is set) |
 | `/*` | Reverse proxy to Emby (after auth) |
@@ -188,12 +189,28 @@ The bridge provides optional integration with [emby-watchparty](https://github.c
 
 When `EMBY_WATCHPARTY_URL` is set, the bridge serves the watchparty UI at `/watchparty/` and the authenticated user's display name is automatically applied when entering the watchparty through the bridge — no manual name entry required.
 
+Both watchparty v1 and v2 (2.0-rework branch) are supported. The bridge detects and handles v2's per-user login requirement automatically.
+
 ### Configuration
 
 The watchparty service (`emby-watchparty`) must be configured with:
 
 - `APP_PREFIX=/watchparty` — so the watchparty UI works correctly under the `/watchparty/` sub-path
-- `REQUIRE_LOGIN=false` — authentication is already handled by the bridge via the OIDC provider, so the watchparty service's own login must be disabled
+
+The `REQUIRE_LOGIN` setting depends on which watchparty version you run:
+
+| Watchparty version | `REQUIRE_LOGIN` | Reason |
+|--------------------|-----------------|--------|
+| v1 (main branch) | `false` | Auth handled entirely by the bridge/OIDC — watchparty's own login is disabled |
+| v2 (2.0-rework) | `true` | The bridge auto-fills and submits the watchparty login form on behalf of each user |
+
+For v2, the bridge injects a script into watchparty HTML responses that automatically detects the login form, fetches the user's Emby credentials from `/api/credentials`, and submits the form. The party creator is automatically made host. No manual login is required.
+
+No new environment variables are needed on the bridge side for v2 support — only the watchparty container's `REQUIRE_LOGIN` value changes.
+
+### Requirements
+
+All watchparty users must be authenticated members behind oauth2-proxy. Guest or spectator mode (anonymous party joining) is not available since all users must complete OIDC authentication before accessing the watchparty UI.
 
 See `docker-compose.yml` for a commented-out example ready to enable.
 

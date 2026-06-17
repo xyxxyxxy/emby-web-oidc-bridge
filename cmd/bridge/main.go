@@ -98,6 +98,9 @@ func main() {
 	// /account — trusted proxy check only (account page reads sub from headers/JWT).
 	mux.Handle("GET /account", trustedProxy(http.HandlerFunc(handler.Account(database))))
 
+	// /api/credentials — JSON endpoint for authenticated user's Emby credentials.
+	mux.Handle("GET /api/credentials", trustedProxy(auth(http.HandlerFunc(handler.Credentials(database)))))
+
 	// / — redirect to /web/index.html (which handles credential injection).
 	mux.Handle("GET /{$}", trustedProxy(auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/web/index.html", http.StatusFound)

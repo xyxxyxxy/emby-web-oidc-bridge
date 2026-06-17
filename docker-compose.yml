@@ -22,8 +22,8 @@ services:
   #   image: ghcr.io/oratorian/emby-watchparty:latest
   #   environment:
   #     APP_PREFIX: /watchparty
-  #     # Auth is handled by the bridge — disable watchparty's own login.
-  #     REQUIRE_LOGIN: "false"
+  #     # The bridge auto-fills the watchparty login form with the user's credentials.
+  #     REQUIRE_LOGIN: "true"
 
 volumes:
   bridge-data:

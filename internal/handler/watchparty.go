@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 )
 
 const watchpartyUsernameTemplate = `<!DOCTYPE html>
@@ -67,6 +70,47 @@ func WatchpartyProxy(backendURL string) http.Handler {
 			req.Host = target.Host
 			// Preserve the request path unchanged — the watchparty service
 			// expects the /watchparty/ prefix via APP_PREFIX configuration.
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			// Only modify 2xx HTML responses.
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				return nil
+			}
+			contentType := resp.Header.Get("Content-Type")
+			if !strings.Contains(strings.ToLower(contentType), "text/html") {
+				return nil
+			}
+
+			// Read body.
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			_ = resp.Body.Close()
+
+			// Find <head> case-insensitive.
+			lowered := bytes.ToLower(body)
+			idx := bytes.Index(lowered, []byte("<head>"))
+			if idx < 0 {
+				slog.Warn("watchparty: no <head> found, skipping script injection", "path", resp.Request.URL.Path)
+				resp.Body = io.NopCloser(bytes.NewReader(body))
+				return nil
+			}
+
+			// Inject script immediately after <head>.
+			insertPos := idx + len("<head>")
+			scriptTag := []byte("<script>" + watchpartyAutoLoginScript + "</script>")
+
+			modified := make([]byte, 0, len(body)+len(scriptTag))
+			modified = append(modified, body[:insertPos]...)
+			modified = append(modified, scriptTag...)
+			modified = append(modified, body[insertPos:]...)
+
+			resp.Body = io.NopCloser(bytes.NewReader(modified))
+			resp.Header.Del("Content-Length")
+			resp.ContentLength = int64(len(modified))
+
+			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			slog.Error("watchparty: backend error",

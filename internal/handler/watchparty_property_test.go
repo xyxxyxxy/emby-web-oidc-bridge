@@ -3,6 +3,7 @@ package handler_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -249,4 +250,86 @@ func TestWatchpartyProxyBackendUnreachable(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", resp.StatusCode)
 	}
+}
+
+// Feature: watchparty-v2-auto-login, Property 2: Script injection conditional correctness
+// **Validates: Requirements 2.1, 3.1, 3.2, 3.4, 3.5, 6.2**
+func TestWatchpartyProxy_ScriptInjection(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		// Generate test parameters.
+		// Note: 204 (No Content) is excluded because Go's HTTP transport discards
+		// the body for 204 responses per HTTP spec, making body assertions invalid.
+		statusCode := rapid.SampledFrom([]int{200, 201, 301, 400, 404, 500}).Draw(t, "status")
+		contentType := rapid.SampledFrom([]string{
+			"text/html", "text/html; charset=utf-8", "TEXT/HTML",
+			"application/json", "text/css", "application/javascript",
+		}).Draw(t, "contentType")
+		hasHead := rapid.Bool().Draw(t, "hasHead")
+		headTag := rapid.SampledFrom([]string{"<head>", "<HEAD>", "<Head>"}).Draw(t, "headTag")
+
+		// Build response body.
+		var body string
+		if hasHead {
+			body = "<!DOCTYPE html><html>" + headTag + "<title>Test</title></head><body><p>Hello</p></body></html>"
+		} else {
+			body = "<!DOCTYPE html><html><body><p>Hello</p></body></html>"
+		}
+
+		// Create backend server that returns the generated response.
+		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", contentType)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+			w.WriteHeader(statusCode)
+			_, _ = w.Write([]byte(body))
+		}))
+		defer backend.Close()
+
+		// Create proxy and make request.
+		proxy := handler.WatchpartyProxy(backend.URL)
+		req := httptest.NewRequest(http.MethodGet, "/watchparty/", nil)
+		rec := httptest.NewRecorder()
+		proxy.ServeHTTP(rec, req)
+
+		// Determine if injection should happen.
+		isHTML := strings.Contains(strings.ToLower(contentType), "text/html")
+		is2xx := statusCode >= 200 && statusCode < 300
+		shouldInject := is2xx && isHTML && hasHead
+
+		responseBody := rec.Body.String()
+
+		if shouldInject {
+			// Script should be present.
+			if !strings.Contains(responseBody, "<script>") {
+				t.Fatalf("expected script injection but none found")
+				return
+			}
+			// Positioned after <head> tag (case-insensitive check).
+			headIdx := strings.Index(strings.ToLower(responseBody), "<head>")
+			scriptIdx := strings.Index(responseBody, "<script>")
+			if headIdx < 0 {
+				t.Fatalf("no <head> found in response")
+				return
+			}
+			if scriptIdx != headIdx+len("<head>") {
+				t.Fatalf("script not positioned immediately after <head>: headIdx=%d, scriptIdx=%d", headIdx, scriptIdx)
+				return
+			}
+			// Content-Length should be absent (deleted by ModifyResponse).
+			if rec.Header().Get("Content-Length") != "" {
+				t.Fatalf("Content-Length should be removed after injection")
+				return
+			}
+			// No password literals in the injected script (validates 6.2).
+			if strings.Contains(responseBody, `"password"`) {
+				t.Fatalf("injected script should not contain password literals")
+				return
+			}
+		} else {
+			// Body should be unmodified.
+			if responseBody != body {
+				t.Fatalf("body was modified when it should not have been:\nexpected: %q\ngot:      %q", body, responseBody)
+				return
+			}
+		}
+	})
 }
