@@ -16,10 +16,11 @@ services:
     ports:
       - "8080:8080"
 
-  # # Watchparty — synchronized watch-together service (optional).
+  # # Watchparty v2 — synchronized watch-together service (optional).
+  # # Requires the 2.0-Rework branch of emby-watchparty.
   # # Uncomment this service and set EMBY_WATCHPARTY_URL above to enable.
   # emby-watchparty:
-  #   image: ghcr.io/oratorian/emby-watchparty:latest
+  #   image: ghcr.io/oratorian/emby-watchparty:2.0-Rework
   #   environment:
   #     APP_PREFIX: /watchparty
   #     # The bridge auto-fills the watchparty login form with the user's credentials.

@@ -70,6 +70,12 @@ func WatchpartyProxy(backendURL string) http.Handler {
 			req.Host = target.Host
 			// Preserve the request path unchanged — the watchparty service
 			// expects the /watchparty/ prefix via APP_PREFIX configuration.
+
+			// Remove Accept-Encoding so the backend sends uncompressed
+			// responses. ModifyResponse needs to read and modify raw HTML;
+			// the downstream reverse proxy (Caddy/Nginx) will re-compress
+			// for the client.
+			req.Header.Del("Accept-Encoding")
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			// Only modify 2xx HTML responses.
