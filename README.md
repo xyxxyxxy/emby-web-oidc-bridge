@@ -2,27 +2,29 @@
 
 A lightweight Go service that enables OIDC single sign-on for Emby's web interface via [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/).
 
-## Architecture
+## Table of Contents
 
-```
-┌─────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────┐
-│ Browser │────▶│ oauth2-proxy │────▶│   Bridge    │────▶│ Emby │
-└─────────┘     └──────────────┘     └─────────────┘     └──────┘
-                                            │
-                                            ▼
-                                       ┌────────┐
-                                       │ SQLite │
-                                       └────────┘
-```
-
-## Motivation
-
-Emby doesn't support SSO or OpenID Connect natively, and the [feature request](https://emby.media/community/topic/114493-sso-openid/) doesn't look like it's going anywhere soon. Since a full SSO solution across all Emby clients (TV apps, mobile, etc.) is non-trivial, this bridge takes a pragmatic approach: it enables OIDC authentication for the web interface, and provides generated credentials for TV/mobile apps where OAuth flows aren't supported.
+- [How It Works](#how-it-works)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Environment Variables](#environment-variables)
+- [oauth2-proxy Configuration](#oauth2-proxy-configuration)
+  - [Identity Resolution](#identity-resolution)
+  - [Profile Image Sync](#profile-image-sync)
+  - [Request Flow](#request-flow)
+  - [Routes](#routes)
+- [Security Model](#security-model)
+- [Policy Management](#policy-management)
+- [Hidden UI Elements](#hidden-ui-elements)
+- [Watchparty Integration](#watchparty-integration)
+- [Building](#building)
+- [Development](#development)
+- [License](#license)
 
 ## How It Works
 
 ```
-Browser → oauth2-proxy → emby-web-oidc-bridge → Emby Server
+Browser → oauth2-proxy → emby-web-oidc-bridge → Emby
 ```
 
 1. **oauth2-proxy** handles the actual OIDC authentication with your identity provider
@@ -43,44 +45,9 @@ Users are automatically provisioned on first login with settings copied from a c
 - Session cache with automatic invalidation on user deletion (401 detection)
 - Sign Out and Switch User buttons hidden from Emby web UI
 - Account page showing credentials for TV/mobile apps
+- Optional [watchparty integration](#watchparty-integration)
 - Trusted proxy IP validation
 - Single static binary (~10MB Docker image)
-
-## Security Model
-
-- Emby is expected to be hosted behind oauth2-proxy (or a VPN for direct access)
-- The bridge only accepts forwarded headers from IPs in the `TRUSTED_PROXIES` list
-- The generated password is not security-critical — it exists solely for TV/mobile app authentication where OAuth flows aren't supported
-- Passwords are 8 lowercase alphanumeric characters, optimized for easy entry on TV remotes
-- Passwords are stored in plaintext in SQLite (by design — they're not secrets)
-
-## Policy Management
-
-The bridge enforces minimal policy overrides to function correctly, while leaving all other settings under admin control.
-
-**On user creation:** The template user's full policy is applied (library access, parental controls, IsHidden, etc.).
-
-**On every login:** The bridge fetches the user's current policy from Emby and only enforces two fields if they differ from the expected values (skipping unnecessary API calls):
-
-| Policy Field | Enforced Value | Reason |
-|-------------|-------|--------|
-| `IsDisabled` | `false` | Access is managed via the OIDC provider. If a user can authenticate through oauth2-proxy, they should have access. Revoke access at the identity provider, not in Emby. |
-| `EnableUserPreferenceAccess` | `false` | Prevents users from changing their password or profile image in Emby, since these are managed by the bridge. |
-
-All other policy fields (library access, parental controls, `IsHidden`, remote access, etc.) are fully controlled by the admin per-user after creation. The bridge will not overwrite them.
-
-**Important:** If you disable a user in Emby's admin UI, the bridge will re-enable them on their next login. To revoke access, remove the user from your OIDC provider or oauth2-proxy's allowed list instead.
-
-## Hidden UI Elements
-
-The bridge hides the following buttons from the Emby web interface since they don't apply when authentication is managed through OIDC:
-
-| Button | Reason |
-|--------|--------|
-| **Sign Out** | Logging out of Emby makes no sense behind the bridge — the user would be re-authenticated immediately via oauth2-proxy. To sign out, users should log out of the OIDC provider directly. |
-| **Switch User** | User identity is determined by the OIDC session, not by Emby's local user selection. Switching users requires authenticating as a different identity at the OIDC provider. |
-
-These buttons are hidden via CSS injected into the Emby web page. They are not removed from the DOM, so admin users accessing Emby directly (not through the bridge) will still see them.
 
 ## Quick Start
 
@@ -122,6 +89,7 @@ volumes:
 | `BRIDGE_PORT` | No | `8080` | Port the bridge listens on |
 | `DATABASE_PATH` | No | `/data/users.db` | Path to the SQLite database file |
 | `OIDC_ISSUER_URL` | No | — | OIDC issuer URL (enables profile image sync via userinfo/JWT) |
+| `EMBY_WATCHPARTY_URL` | No | — | Internal URL of the [emby-watchparty](https://github.com/Oratorian/emby-watchparty) service (e.g., `http://emby-watchparty:5000`). Enables the `/watchparty/` route when set. |
 
 ## oauth2-proxy Configuration
 
@@ -174,8 +142,69 @@ Both deployment modes support profile image sync when configured correctly. Your
 |-------|---------|
 | `/health` | Health check (DB + Emby connectivity) |
 | `/account` | Shows generated credentials for TV/mobile apps |
+| `/api/credentials` | Returns authenticated user's Emby credentials as JSON (internal API used by auto-login script and account page) |
 | `/web/index.html` | Emby web UI with injected credentials |
+| `/watchparty/*` | Reverse proxy to watchparty service (optional, enabled when `EMBY_WATCHPARTY_URL` is set) |
 | `/*` | Reverse proxy to Emby (after auth) |
+
+## Security Model
+
+- Emby is expected to be hosted behind oauth2-proxy (or a VPN for direct access)
+- The bridge only accepts forwarded headers from IPs in the `TRUSTED_PROXIES` list
+- The generated password is not security-critical — it exists solely for TV/mobile app authentication where OAuth flows aren't supported
+- Passwords are 8 lowercase alphanumeric characters, optimized for easy entry on TV remotes
+- Passwords are stored in plaintext in SQLite (by design — they're not secrets)
+
+## Policy Management
+
+The bridge enforces minimal policy overrides to function correctly, while leaving all other settings under admin control.
+
+**On user creation:** The template user's full policy is applied (library access, parental controls, IsHidden, etc.).
+
+**On every login:** The bridge fetches the user's current policy from Emby and only enforces two fields if they differ from the expected values (skipping unnecessary API calls):
+
+| Policy Field | Enforced Value | Reason |
+|-------------|-------|--------|
+| `IsDisabled` | `false` | Access is managed via the OIDC provider. If a user can authenticate through oauth2-proxy, they should have access. Revoke access at the identity provider, not in Emby. |
+| `EnableUserPreferenceAccess` | `false` | Prevents users from changing their password or profile image in Emby, since these are managed by the bridge. |
+
+All other policy fields (library access, parental controls, `IsHidden`, remote access, etc.) are fully controlled by the admin per-user after creation. The bridge will not overwrite them.
+
+**Important:** If you disable a user in Emby's admin UI, the bridge will re-enable them on their next login. To revoke access, remove the user from your OIDC provider or oauth2-proxy's allowed list instead.
+
+## Hidden UI Elements
+
+The bridge hides the following buttons from the Emby web interface since they don't apply when authentication is managed through OIDC:
+
+| Button | Reason |
+|--------|--------|
+| **Sign Out** | Logging out of Emby makes no sense behind the bridge — the user would be re-authenticated immediately via oauth2-proxy. To sign out, users should log out of the OIDC provider directly. |
+| **Switch User** | User identity is determined by the OIDC session, not by Emby's local user selection. Switching users requires authenticating as a different identity at the OIDC provider. |
+
+These buttons are hidden via CSS injected into the Emby web page. They are not removed from the DOM, so admin users accessing Emby directly (not through the bridge) will still see them.
+
+## Watchparty Integration
+
+The bridge provides optional integration with [emby-watchparty](https://github.com/Oratorian/emby-watchparty) (2.0-Rework branch), a synchronized watch-together service for Emby. This feature is disabled by default.
+
+When `EMBY_WATCHPARTY_URL` is set, the bridge serves the watchparty UI at `/watchparty/` and handles authentication automatically. The user's display name is set via localStorage on first visit, and the bridge's auto-login script fills the watchparty login form with the user's Emby credentials.
+
+### Configuration
+
+The watchparty container (`emby-watchparty`) must be configured with:
+
+- `APP_PREFIX=/watchparty` — required for sub-path routing
+- `REQUIRE_LOGIN=true` — the bridge handles login automatically by injecting credentials into the form
+
+The bridge injects a script into watchparty HTML responses that detects the login form via MutationObserver, fetches credentials from `/api/credentials`, and submits the form. The party creator is automatically made host. No manual login is required.
+
+No new environment variables are needed on the bridge side — `EMBY_WATCHPARTY_URL` enables both the proxy and the auto-login behavior.
+
+### Requirements
+
+All watchparty users must be authenticated members behind oauth2-proxy. Guest or spectator mode (anonymous party joining) is not available since all users must complete OIDC authentication before accessing the watchparty UI.
+
+See `docker-compose.yml` for a commented-out example ready to enable.
 
 ## Building
 

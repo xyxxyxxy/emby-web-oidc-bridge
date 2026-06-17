@@ -298,6 +298,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			if cached, ok := sessionCache.Load(headers.Sub); ok {
 				session := cached.(*cachedSession)
 				if time.Now().Before(session.expiresAt) {
+					ctx = handler.WithAuthUsername(ctx, headers.embyUsername())
 					ctx = handler.WithAuthSub(ctx, headers.Sub)
 					ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
 					next.ServeHTTP(w, r.WithContext(ctx))
@@ -757,6 +758,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			}()
 
 			// Store auth session in context for downstream handlers.
+			ctx = handler.WithAuthUsername(ctx, headers.embyUsername())
 			ctx = handler.WithAuthSub(ctx, headers.Sub)
 			ctx = handler.WithAuthSession(ctx, authResult.AccessToken, authResult.User.ID, authResult.ServerID)
 			next.ServeHTTP(w, r.WithContext(ctx))
