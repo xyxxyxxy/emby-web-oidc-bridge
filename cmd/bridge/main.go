@@ -115,13 +115,7 @@ func main() {
 	if cfg.WatchpartyEnabled() {
 		watchpartyProxy := handler.WatchpartyProxy(cfg.WatchpartyURL)
 		watchpartyLogin := handler.WatchpartyLogin(database, cfg.WatchpartyURL, watchpartyProxy)
-		mux.Handle("/watchparty/", trustedProxy(auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/watchparty/" {
-				watchpartyLogin(w, r)
-				return
-			}
-			watchpartyProxy.ServeHTTP(w, r)
-		}))))
+		mux.Handle("/watchparty/", trustedProxy(auth(watchpartyLogin)))
 	}
 
 	if cfg.WatchpartyEnabled() {

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/db"
@@ -38,15 +39,24 @@ type watchpartyLoginRequest struct {
 
 // WatchpartyLogin returns an http.HandlerFunc that:
 //  1. Checks for the bridge cookie — if present, proxies through immediately.
-//  2. Otherwise POSTs credentials to the watchparty login API server-side,
-//     forwards the resulting session cookie(s) to the client, sets the bridge
-//     cookie to prevent re-entry, and serves a small page that writes
-//     emby-watchparty-username to localStorage before redirecting to /watchparty/.
+//  2. On the first GET request for an HTML page (initial navigation), POSTs
+//     credentials to the watchparty login API server-side, forwards the
+//     resulting session cookie(s) to the client, sets the bridge cookie to
+//     prevent re-entry, and serves a small page that writes
+//     emby-watchparty-username to localStorage before redirecting.
+//  3. All other requests (assets, API calls) are proxied directly.
 func WatchpartyLogin(database *db.DB, watchpartyBackendURL string, proxy http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// If the bridge cookie is present, the pre-auth redirect has already
 		// happened — pass directly to the proxy.
 		if _, err := r.Cookie(watchpartyBridgeCookie); err == nil {
+			proxy.ServeHTTP(w, r)
+			return
+		}
+
+		// Only intercept GET requests that look like initial HTML page loads.
+		// Asset requests (JS, CSS, images, API calls) go straight to the proxy.
+		if !isWatchpartyPageRequest(r) {
 			proxy.ServeHTTP(w, r)
 			return
 		}
@@ -168,4 +178,26 @@ func WatchpartyProxy(backendURL string) http.Handler {
 	}
 
 	return proxy
+}
+
+// isWatchpartyPageRequest returns true for GET requests that represent an
+// initial HTML page navigation — i.e. paths without a file extension that
+// look like app routes (/, /party/CODE, /login, etc.).
+// Asset requests (*.js, *.css, *.png, API calls under /api/) go straight
+// to the proxy and should not trigger the pre-auth flow.
+func isWatchpartyPageRequest(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	path := r.URL.Path
+	// API calls are never page navigations.
+	if strings.HasPrefix(path, "/watchparty/api/") {
+		return false
+	}
+	// Paths with a file extension are assets.
+	lastSeg := path
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		lastSeg = path[idx+1:]
+	}
+	return !strings.Contains(lastSeg, ".")
 }
