@@ -4,25 +4,8 @@ package handler
 // detects watchparty v2 login forms via MutationObserver, fetches the user's
 // Emby credentials from the bridge's /api/credentials endpoint, fills the
 // form fields with proper Vue.js reactivity events, and submits.
-// A companion style tag (#_ewp_bridge_hide) hides .modal-overlay on page
-// load; this script re-adds it each time auto-login fires and removes it
-// only on completion so the modal never flashes.
 const watchpartyAutoLoginScript = `(function() {
   var inFlight = false;
-
-  function hideModal() {
-    if (!document.getElementById('_ewp_bridge_hide')) {
-      var s = document.createElement('style');
-      s.id = '_ewp_bridge_hide';
-      s.textContent = '.modal-overlay{display:none!important}';
-      document.head.appendChild(s);
-    }
-  }
-
-  function revealModal() {
-    var s = document.getElementById('_ewp_bridge_hide');
-    if (s) s.parentNode.removeChild(s);
-  }
 
   function tryAutoLogin(form) {
     if (inFlight) return;
@@ -36,7 +19,6 @@ const watchpartyAutoLoginScript = `(function() {
     if (!submitBtn) return;
 
     inFlight = true;
-    hideModal();
 
     var controller = new AbortController();
     var timeout = setTimeout(function() { controller.abort(); }, 10000);
@@ -64,13 +46,10 @@ const watchpartyAutoLoginScript = `(function() {
 
       submitBtn.click();
       inFlight = false;
-      revealModal();
     }).catch(function(err) {
       clearTimeout(timeout);
       console.warn('[emby-bridge] auto-login failed:', err.message || err);
       inFlight = false;
-      // Reveal the modal so the user can log in manually.
-      revealModal();
     });
   }
 

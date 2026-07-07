@@ -298,24 +298,20 @@ func TestWatchpartyProxy_ScriptInjection(t *testing.T) {
 		responseBody := rec.Body.String()
 
 		if shouldInject {
-			// Style tag and script should both be present.
-			if !strings.Contains(responseBody, "<style id=\"_ewp_bridge_hide\">") {
-				t.Fatalf("expected style tag injection but none found")
-				return
-			}
+			// Script should be present.
 			if !strings.Contains(responseBody, "<script>") {
 				t.Fatalf("expected script injection but none found")
 				return
 			}
-			// Style tag positioned immediately after <head> (case-insensitive check).
+			// Positioned after <head> tag (case-insensitive check).
 			headIdx := strings.Index(strings.ToLower(responseBody), "<head>")
-			styleIdx := strings.Index(responseBody, "<style id=\"_ewp_bridge_hide\">")
+			scriptIdx := strings.Index(responseBody, "<script>")
 			if headIdx < 0 {
 				t.Fatalf("no <head> found in response")
 				return
 			}
-			if styleIdx != headIdx+len("<head>") {
-				t.Fatalf("style not positioned immediately after <head>: headIdx=%d, styleIdx=%d", headIdx, styleIdx)
+			if scriptIdx != headIdx+len("<head>") {
+				t.Fatalf("script not positioned immediately after <head>: headIdx=%d, scriptIdx=%d", headIdx, scriptIdx)
 				return
 			}
 			// Content-Length should be absent (deleted by ModifyResponse).

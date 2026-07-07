@@ -105,16 +105,7 @@ func WatchpartyProxy(backendURL string) http.Handler {
 
 			// Inject script immediately after <head>.
 			insertPos := idx + len("<head>")
-			scriptTag := []byte(
-				"<style id=\"_ewp_bridge_hide\">" +
-					// Hide all modal overlays immediately on page load to prevent
-					// the EmbyLoginModal flashing before auto-login completes.
-					// The script removes this style on success or failure, so
-					// other modals (opened by user interaction) are unaffected.
-					".modal-overlay{display:none!important}" +
-					"</style>" +
-					"<script>" + watchpartyAutoLoginScript + "</script>",
-			)
+			scriptTag := []byte("<script>" + watchpartyAutoLoginScript + "</script>")
 
 			modified := make([]byte, 0, len(body)+len(scriptTag))
 			modified = append(modified, body[:insertPos]...)
