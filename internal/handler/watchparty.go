@@ -105,7 +105,15 @@ func WatchpartyProxy(backendURL string) http.Handler {
 
 			// Inject script immediately after <head>.
 			insertPos := idx + len("<head>")
-			scriptTag := []byte("<script>" + watchpartyAutoLoginScript + "</script>")
+			scriptTag := []byte(
+				"<style id=\"_ewp_bridge_hide\">" +
+					// Hide the EmbyLoginModal overlay (div.modal-overlay) while
+					// auto-login is in progress. Removed by the script on success
+					// or failure so the modal appears normally as a fallback.
+					".modal-overlay:has(input[autocomplete=\"current-password\"]){display:none!important}" +
+					"</style>" +
+					"<script>" + watchpartyAutoLoginScript + "</script>",
+			)
 
 			modified := make([]byte, 0, len(body)+len(scriptTag))
 			modified = append(modified, body[:insertPos]...)
