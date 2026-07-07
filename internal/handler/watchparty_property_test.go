@@ -276,14 +276,10 @@ func TestWatchpartyLoginBridgeCookieBypassesPreAuth(t *testing.T) {
 }
 
 // TestWatchpartyLoginForwardsSessionCookies verifies that session cookies from
-// the watchparty login response are forwarded to the client.
+// the watchparty login response are forwarded to the client verbatim.
 func TestWatchpartyLoginForwardsSessionCookies(t *testing.T) {
 	loginBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.SetCookie(w, &http.Cookie{
-			Name:  "session",
-			Value: "abc123",
-			Path:  "/watchparty",
-		})
+		w.Header().Add("Set-Cookie", "session=abc123; Path=/watchparty; HttpOnly; SameSite=Lax")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer loginBackend.Close()
@@ -292,8 +288,8 @@ func TestWatchpartyLoginForwardsSessionCookies(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 	})
 
-	db := newTestDB(t, "sub1", "user1", "pass1")
-	loginHandler := handler.WatchpartyLogin(db, loginBackend.URL, nopProxy)
+	database := newTestDB(t, "sub1", "user1", "pass1")
+	loginHandler := handler.WatchpartyLogin(database, loginBackend.URL, nopProxy)
 
 	req := httptest.NewRequest(http.MethodGet, "/watchparty/", nil)
 	ctx := handler.WithAuthSub(req.Context(), "sub1")
@@ -306,22 +302,23 @@ func TestWatchpartyLoginForwardsSessionCookies(t *testing.T) {
 	resp := rec.Result()
 	defer func() { _ = resp.Body.Close() }()
 
-	// Look for the forwarded session cookie.
+	setCookieHeaders := resp.Header["Set-Cookie"]
+
 	var foundSession, foundBridge bool
-	for _, c := range resp.Cookies() {
-		if c.Name == "session" && c.Value == "abc123" {
+	for _, v := range setCookieHeaders {
+		if strings.HasPrefix(v, "session=abc123") {
 			foundSession = true
 		}
-		if c.Name == "_wp_bridge_authed" {
+		if strings.HasPrefix(v, "_wp_bridge_authed=") {
 			foundBridge = true
 		}
 	}
 
 	if !foundSession {
-		t.Fatal("expected session cookie to be forwarded to client")
+		t.Fatalf("expected session cookie to be forwarded verbatim, got: %v", setCookieHeaders)
 	}
 	if !foundBridge {
-		t.Fatal("expected bridge cookie to be set")
+		t.Fatalf("expected bridge cookie to be set, got: %v", setCookieHeaders)
 	}
 }
 

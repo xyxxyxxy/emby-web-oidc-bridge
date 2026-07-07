@@ -82,10 +82,13 @@ func WatchpartyLogin(database *db.DB, watchpartyBackendURL string, proxy http.Ha
 			proxy.ServeHTTP(w, r)
 			return
 		}
+		slog.Info("watchparty: pre-auth login succeeded", "sub", sub, "cookies", len(sessionCookies))
 
-		// Forward the watchparty session cookie(s) to the client.
+		// Forward the watchparty session cookie(s) to the client verbatim,
+		// preserving all attributes (HttpOnly, SameSite, Path, etc.) exactly
+		// as the backend sent them.
 		for _, sc := range sessionCookies {
-			http.SetCookie(w, sc)
+			w.Header().Add("Set-Cookie", sc)
 		}
 
 		// Set the short-lived bridge cookie so the redirect target goes straight
@@ -110,8 +113,8 @@ func WatchpartyLogin(database *db.DB, watchpartyBackendURL string, proxy http.Ha
 }
 
 // watchpartyDoLogin POSTs credentials to the watchparty login API and returns
-// the session cookies from the response.
-func watchpartyDoLogin(loginURL, username, password string) ([]*http.Cookie, error) {
+// the raw Set-Cookie header values from the response.
+func watchpartyDoLogin(loginURL, username, password string) ([]string, error) {
 	body, err := json.Marshal(watchpartyLoginRequest{Username: username, Password: password})
 	if err != nil {
 		return nil, fmt.Errorf("marshalling login request: %w", err)
@@ -130,7 +133,9 @@ func watchpartyDoLogin(loginURL, username, password string) ([]*http.Cookie, err
 		return nil, fmt.Errorf("watchparty login returned status %d", resp.StatusCode)
 	}
 
-	return resp.Cookies(), nil
+	// Return raw Set-Cookie header values so attributes (HttpOnly, SameSite,
+	// Path, etc.) are preserved exactly as the backend sent them.
+	return resp.Header["Set-Cookie"], nil
 }
 
 // WatchpartyProxy returns an http.Handler that reverse-proxies requests to the
