@@ -143,6 +143,13 @@ func watchpartyDoLogin(loginURL, username, password string) ([]string, error) {
 		return nil, fmt.Errorf("watchparty login returned status %d", resp.StatusCode)
 	}
 
+	// Log response to aid diagnosing missing cookies.
+	cookieCount := len(resp.Header["Set-Cookie"])
+	slog.Info("watchparty: login POST response", "status", resp.StatusCode, "set_cookie_count", cookieCount)
+	if cookieCount == 0 {
+		slog.Warn("watchparty: login returned no Set-Cookie headers", "response_headers", resp.Header)
+	}
+
 	// Return raw Set-Cookie header values so attributes (HttpOnly, SameSite,
 	// Path, etc.) are preserved exactly as the backend sent them.
 	return resp.Header["Set-Cookie"], nil
