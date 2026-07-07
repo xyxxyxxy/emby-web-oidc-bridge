@@ -9,35 +9,12 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"pgregory.net/rapid"
 
-	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/db"
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/handler"
 )
-
-var watchpartyDBCounter atomic.Int64
-
-// newTestDB opens a unique in-memory SQLite database and optionally seeds one user.
-// If sub is empty, the database is returned empty.
-func newTestDB(t *testing.T, sub, username, password string) *db.DB {
-	t.Helper()
-	n := watchpartyDBCounter.Add(1)
-	uri := fmt.Sprintf("file:wptestdb%d?mode=memory&cache=shared", n)
-	database, err := db.Open(uri)
-	if err != nil {
-		t.Fatalf("db.Open failed: %v", err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	if sub != "" {
-		if err := database.InsertUser(sub, username, "test@example.com", "userid1", password); err != nil {
-			t.Fatalf("InsertUser failed: %v", err)
-		}
-	}
-	return database
-}
 
 // Feature: emby-watchparty-support, Property 3: Watchparty proxy path preservation
 // **Validates: Requirements 2.2**
@@ -85,25 +62,11 @@ func TestWatchpartyProxyPathPreservation(t *testing.T) {
 	})
 }
 
-// Feature: emby-watchparty-support, Property 4: Login page sets localStorage with safe encoding
+// Feature: emby-watchparty-support, Property 4: Username redirect page sets localStorage with safe encoding
 // **Validates: Requirements 3.1, 3.3**
-func TestWatchpartyLoginPageSafeEncoding(t *testing.T) {
-	// scriptRe extracts the JSON-encoded value from the localStorage script in the login page.
+func TestWatchpartyUsernamePageSafeEncoding(t *testing.T) {
+	// scriptRe extracts the JSON-encoded value from the localStorage script in the redirect page.
 	scriptRe := regexp.MustCompile(`localStorage\.setItem\('emby-watchparty-username', (.+?)\);`)
-
-	// Build a fake watchparty login backend that returns 200 OK.
-	loginBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer loginBackend.Close()
-
-	// Build a no-op proxy (should not be called when pre-auth succeeds).
-	nopProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTeapot)
-	})
-
-	// Open DB once for the outer test — rapid runs vary only in username.
-	database := newTestDB(t, "testsub", "placeholder", "testpassword")
 
 	rapid.Check(t, func(t *rapid.T) {
 		// Generate a random username with special characters: quotes, backslashes,
@@ -113,20 +76,18 @@ func TestWatchpartyLoginPageSafeEncoding(t *testing.T) {
 			rapid.StringMatching(`[\"\\<>/\x00-\x1f\x{1f600}-\x{1f64f}]+`),
 		).Draw(t, "username")
 
-		// Skip empty usernames since the handler falls through to the proxy.
+		// Skip empty usernames since the handler redirects without setting for them.
 		if username == "" {
 			return
 		}
 
-		loginHandler := handler.WatchpartyLogin(database, loginBackend.URL, nopProxy)
-
+		// Create a request to /watchparty/ (without ?u=1) with the username in context.
 		req := httptest.NewRequest(http.MethodGet, "/watchparty/", nil)
-		ctx := handler.WithAuthSub(req.Context(), "testsub")
-		ctx = handler.WithAuthUsername(ctx, username)
+		ctx := handler.WithAuthUsername(req.Context(), username)
 		req = req.WithContext(ctx)
 
 		rec := httptest.NewRecorder()
-		loginHandler(rec, req)
+		handler.WatchpartySetUsername()(rec, req)
 
 		resp := rec.Result()
 		defer func() { _ = resp.Body.Close() }()
@@ -157,9 +118,9 @@ func TestWatchpartyLoginPageSafeEncoding(t *testing.T) {
 			t.Fatalf("decoded username %q does not match original %q", decoded, username)
 		}
 
-		// Verify the page redirects to /watchparty/ (no ?u=1).
-		if !strings.Contains(string(body), "window.location.replace('/watchparty/')") {
-			t.Fatalf("redirect to /watchparty/ not found in response body")
+		// Verify the page contains a redirect to /watchparty/?u=1
+		if !strings.Contains(string(body), "/watchparty/?u=1") {
+			t.Fatalf("redirect to /watchparty/?u=1 not found in response body")
 		}
 	})
 }
@@ -179,7 +140,7 @@ func TestWatchpartyProxyResponsePassthrough(t *testing.T) {
 	}
 
 	rapid.Check(t, func(t *rapid.T) {
-		// Pick a random content type.
+		// Pick a random content type (including text/html — proxy should NOT modify).
 		contentType := rapid.SampledFrom(contentTypes).Draw(t, "contentType")
 
 		// Generate a random response body (binary-safe).
@@ -226,129 +187,27 @@ func TestWatchpartyProxyResponsePassthrough(t *testing.T) {
 	})
 }
 
-// TestWatchpartyLoginMissingContext verifies that when no auth context is
-// present, the handler falls through to the proxy without attempting pre-auth.
-func TestWatchpartyLoginMissingContext(t *testing.T) {
-	var proxyCalled bool
-	nopProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxyCalled = true
-		w.WriteHeader(http.StatusOK)
-	})
-
-	db := newTestDB(t, "", "", "")
-	loginHandler := handler.WatchpartyLogin(db, "http://unused", nopProxy)
-
+// TestWatchpartySetUsernameEmptyUsername verifies that when no username is in
+// context, the handler redirects to /watchparty/?u=1 without serving the
+// localStorage-setting page.
+func TestWatchpartySetUsernameEmptyUsername(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/watchparty/", nil)
-	// No auth context set.
+	// No username in context.
 
 	rec := httptest.NewRecorder()
-	loginHandler(rec, req)
-
-	if !proxyCalled {
-		t.Fatal("expected proxy to be called when auth context is missing")
-	}
-}
-
-// TestWatchpartyLoginBridgeCookieBypassesPreAuth verifies that when the bridge
-// cookie is present, the handler proxies immediately without attempting login.
-func TestWatchpartyLoginBridgeCookieBypassesPreAuth(t *testing.T) {
-	var proxyCalled bool
-	nopProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxyCalled = true
-		w.WriteHeader(http.StatusOK)
-	})
-
-	db := newTestDB(t, "sub1", "user1", "pass1")
-	loginHandler := handler.WatchpartyLogin(db, "http://unused", nopProxy)
-
-	req := httptest.NewRequest(http.MethodGet, "/watchparty/", nil)
-	req.AddCookie(&http.Cookie{Name: "_wp_bridge_authed", Value: "1"})
-	ctx := handler.WithAuthSub(req.Context(), "sub1")
-	ctx = handler.WithAuthUsername(ctx, "user1")
-	req = req.WithContext(ctx)
-
-	rec := httptest.NewRecorder()
-	loginHandler(rec, req)
-
-	if !proxyCalled {
-		t.Fatal("expected proxy to be called when bridge cookie is present")
-	}
-}
-
-// TestWatchpartyLoginForwardsSessionCookies verifies that session cookies from
-// the watchparty login response are forwarded to the client verbatim.
-func TestWatchpartyLoginForwardsSessionCookies(t *testing.T) {
-	loginBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Add("Set-Cookie", "session=abc123; Path=/watchparty; HttpOnly; SameSite=Lax")
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer loginBackend.Close()
-
-	nopProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusTeapot)
-	})
-
-	database := newTestDB(t, "sub1", "user1", "pass1")
-	loginHandler := handler.WatchpartyLogin(database, loginBackend.URL, nopProxy)
-
-	req := httptest.NewRequest(http.MethodGet, "/watchparty/", nil)
-	ctx := handler.WithAuthSub(req.Context(), "sub1")
-	ctx = handler.WithAuthUsername(ctx, "user1")
-	req = req.WithContext(ctx)
-
-	rec := httptest.NewRecorder()
-	loginHandler(rec, req)
+	handler.WatchpartySetUsername()(rec, req)
 
 	resp := rec.Result()
 	defer func() { _ = resp.Body.Close() }()
 
-	setCookieHeaders := resp.Header["Set-Cookie"]
-
-	var foundSession, foundBridge bool
-	for _, v := range setCookieHeaders {
-		if strings.HasPrefix(v, "session=abc123") {
-			foundSession = true
-		}
-		if strings.HasPrefix(v, "_wp_bridge_authed=") {
-			foundBridge = true
-		}
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("expected 302 redirect, got %d", resp.StatusCode)
+		return
 	}
 
-	if !foundSession {
-		t.Fatalf("expected session cookie to be forwarded verbatim, got: %v", setCookieHeaders)
-	}
-	if !foundBridge {
-		t.Fatalf("expected bridge cookie to be set, got: %v", setCookieHeaders)
-	}
-}
-
-// TestWatchpartyLoginBackendFailureFallsThrough verifies that when the watchparty
-// login endpoint returns a non-2xx status, the handler falls through to the proxy.
-func TestWatchpartyLoginBackendFailureFallsThrough(t *testing.T) {
-	loginBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer loginBackend.Close()
-
-	var proxyCalled bool
-	nopProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxyCalled = true
-		w.WriteHeader(http.StatusOK)
-	})
-
-	db := newTestDB(t, "sub1", "user1", "wrongpassword")
-	loginHandler := handler.WatchpartyLogin(db, loginBackend.URL, nopProxy)
-
-	req := httptest.NewRequest(http.MethodGet, "/watchparty/", nil)
-	ctx := handler.WithAuthSub(req.Context(), "sub1")
-	ctx = handler.WithAuthUsername(ctx, "user1")
-	req = req.WithContext(ctx)
-
-	rec := httptest.NewRecorder()
-	loginHandler(rec, req)
-
-	if !proxyCalled {
-		t.Fatal("expected proxy to be called when login backend fails")
+	location := resp.Header.Get("Location")
+	if location != "/watchparty/?u=1" {
+		t.Fatalf("expected redirect to /watchparty/?u=1, got %q", location)
 	}
 }
 
@@ -391,4 +250,86 @@ func TestWatchpartyProxyBackendUnreachable(t *testing.T) {
 	if resp.StatusCode != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", resp.StatusCode)
 	}
+}
+
+// Feature: watchparty-v2-auto-login, Property 2: Script injection conditional correctness
+// **Validates: Requirements 2.1, 3.1, 3.2, 3.4, 3.5, 6.2**
+func TestWatchpartyProxy_ScriptInjection(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		// Generate test parameters.
+		// Note: 204 (No Content) is excluded because Go's HTTP transport discards
+		// the body for 204 responses per HTTP spec, making body assertions invalid.
+		statusCode := rapid.SampledFrom([]int{200, 201, 301, 400, 404, 500}).Draw(t, "status")
+		contentType := rapid.SampledFrom([]string{
+			"text/html", "text/html; charset=utf-8", "TEXT/HTML",
+			"application/json", "text/css", "application/javascript",
+		}).Draw(t, "contentType")
+		hasHead := rapid.Bool().Draw(t, "hasHead")
+		headTag := rapid.SampledFrom([]string{"<head>", "<HEAD>", "<Head>"}).Draw(t, "headTag")
+
+		// Build response body.
+		var body string
+		if hasHead {
+			body = "<!DOCTYPE html><html>" + headTag + "<title>Test</title></head><body><p>Hello</p></body></html>"
+		} else {
+			body = "<!DOCTYPE html><html><body><p>Hello</p></body></html>"
+		}
+
+		// Create backend server that returns the generated response.
+		backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", contentType)
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+			w.WriteHeader(statusCode)
+			_, _ = w.Write([]byte(body))
+		}))
+		defer backend.Close()
+
+		// Create proxy and make request.
+		proxy := handler.WatchpartyProxy(backend.URL)
+		req := httptest.NewRequest(http.MethodGet, "/watchparty/", nil)
+		rec := httptest.NewRecorder()
+		proxy.ServeHTTP(rec, req)
+
+		// Determine if injection should happen.
+		isHTML := strings.Contains(strings.ToLower(contentType), "text/html")
+		is2xx := statusCode >= 200 && statusCode < 300
+		shouldInject := is2xx && isHTML && hasHead
+
+		responseBody := rec.Body.String()
+
+		if shouldInject {
+			// Script should be present.
+			if !strings.Contains(responseBody, "<script>") {
+				t.Fatalf("expected script injection but none found")
+				return
+			}
+			// Positioned after <head> tag (case-insensitive check).
+			headIdx := strings.Index(strings.ToLower(responseBody), "<head>")
+			scriptIdx := strings.Index(responseBody, "<script>")
+			if headIdx < 0 {
+				t.Fatalf("no <head> found in response")
+				return
+			}
+			if scriptIdx != headIdx+len("<head>") {
+				t.Fatalf("script not positioned immediately after <head>: headIdx=%d, scriptIdx=%d", headIdx, scriptIdx)
+				return
+			}
+			// Content-Length should be absent (deleted by ModifyResponse).
+			if rec.Header().Get("Content-Length") != "" {
+				t.Fatalf("Content-Length should be removed after injection")
+				return
+			}
+			// No password literals in the injected script (validates 6.2).
+			if strings.Contains(responseBody, `"password"`) {
+				t.Fatalf("injected script should not contain password literals")
+				return
+			}
+		} else {
+			// Body should be unmodified.
+			if responseBody != body {
+				t.Fatalf("body was modified when it should not have been:\nexpected: %q\ngot:      %q", body, responseBody)
+				return
+			}
+		}
+	})
 }

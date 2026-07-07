@@ -110,12 +110,18 @@ func main() {
 	mux.Handle("GET /web/index.html", trustedProxy(auth(http.HandlerFunc(handler.InjectCredentials(cfg.EmbyAPIURL)))))
 
 	// /watchparty/ — optional watchparty integration.
-	// The login handler performs server-side pre-auth on the first request
-	// (no bridge cookie present), then proxies all subsequent requests directly.
+	// GET /watchparty/ without ?u=1 serves a page that sets the username in
+	// localStorage and redirects. All other /watchparty/ requests are proxied.
 	if cfg.WatchpartyEnabled() {
 		watchpartyProxy := handler.WatchpartyProxy(cfg.WatchpartyURL)
-		watchpartyLogin := handler.WatchpartyLogin(database, cfg.WatchpartyURL, watchpartyProxy)
-		mux.Handle("/watchparty/", trustedProxy(auth(watchpartyLogin)))
+		mux.Handle("/watchparty/", trustedProxy(auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// If this is the exact root path without the "u" param, serve the username page.
+			if r.URL.Path == "/watchparty/" && r.URL.Query().Get("u") == "" {
+				handler.WatchpartySetUsername()(w, r)
+				return
+			}
+			watchpartyProxy.ServeHTTP(w, r)
+		}))))
 	}
 
 	if cfg.WatchpartyEnabled() {

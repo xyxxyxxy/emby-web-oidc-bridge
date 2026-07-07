@@ -194,6 +194,7 @@ When `EMBY_WATCHPARTY_URL` is set, the bridge serves the watchparty UI at `/watc
 The watchparty container (`emby-watchparty`) must be configured with:
 
 - `APP_PREFIX=/watchparty` — required for sub-path routing
+- `REQUIRE_LOGIN=true` — the bridge handles login automatically by injecting credentials into the form
 
 The bridge injects a script into watchparty HTML responses that detects the login form via MutationObserver, fetches credentials from `/api/credentials`, and submits the form. The party creator is automatically made host. No manual login is required.
 
