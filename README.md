@@ -29,7 +29,7 @@ Browser → oauth2-proxy → emby-web-oidc-bridge → Emby Server
 2. **The Bridge** reads the OIDC identity from forwarded headers and the JWT ID token, auto-provisions users in Emby, authenticates them, and proxies requests through
 3. **Emby** sees a normal authenticated session
 
-Users are identified by their OIDC `sub` (subject) claim — a stable, unique identifier that never changes. The Emby account username is derived from OIDC claims in this order: `preferred_username` > `name` > `email`. If a username/email changes in the OIDC provider, the bridge automatically syncs the change to Emby without creating a duplicate account.
+Users are identified by their OIDC `sub` (subject) claim — a stable, unique identifier that never changes. The Emby account username is set from the OIDC `preferred_username` claim. If the username changes in the OIDC provider, the bridge automatically syncs the change to Emby without creating a duplicate account.
 
 Users are automatically provisioned on first login with settings copied from a configurable template user. A simple account page (`/account`) shows generated credentials for use in TV/mobile apps.
 
@@ -139,12 +139,12 @@ The bridge extracts user identity from the JWT ID token and forwarded headers:
 | Claim/Header | Purpose |
 |---|---|
 | `sub` | Stable user identifier (required) — links OIDC identity to Emby account |
-| `preferred_username` | First choice for Emby username |
-| `name` | Second choice for Emby username |
-| `email` | Final fallback for Emby username (always unique) |
+| `preferred_username` | Emby username (required) |
+| `name` | Display name stored in the bridge database |
+| `email` | Email stored in the bridge database |
 | `picture` | Profile image URL synced to Emby |
 
-If the preferred username is already taken by another Emby user during account creation, the bridge automatically falls through to the next candidate.
+If the preferred username is already taken by another Emby user during account creation, provisioning fails.
 
 ### Profile Image Sync
 
