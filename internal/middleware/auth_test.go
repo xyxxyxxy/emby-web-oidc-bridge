@@ -116,7 +116,7 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 	defer func() { _ = database.Close() }()
 
 	// Pre-insert user into DB.
-	err = database.InsertUser("sub-alice", "Alice", "alice@example.com", "user-123", "storedpw")
+	err = database.InsertUser("sub-alice", "user-123", "storedpw")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestAuth_ExistingUserPreferredUsernameMismatch(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-admin", "Admin User", "admin@example.com", "admin-user-id", "storedpw")
+	err = database.InsertUser("sub-admin", "admin-user-id", "storedpw")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -359,12 +359,6 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 	}
 	if record.EmbyUserID != "new-user-456" {
 		t.Errorf("expected emby_user_id %q, got %q", "new-user-456", record.EmbyUserID)
-	}
-	if record.Name != "newuser" {
-		t.Errorf("expected name %q, got %q", "newuser", record.Name)
-	}
-	if record.Email != "newuser@example.com" {
-		t.Errorf("expected email %q, got %q", "newuser@example.com", record.Email)
 	}
 }
 
@@ -563,7 +557,7 @@ func TestAuth_AuthTokenInContext(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-ctx", "Context User", "context@example.com", "user-ctx", "ctxpass")
+	err = database.InsertUser("sub-ctx", "user-ctx", "ctxpass")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -707,7 +701,7 @@ func TestAuth_UsernameSync(t *testing.T) {
 	defer func() { _ = database.Close() }()
 
 	// Insert user with old name.
-	err = database.InsertUser("sub-rename", "Old Name", "user@example.com", "emby-rename-1", "renamepass")
+	err = database.InsertUser("sub-rename", "emby-rename-1", "renamepass")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -775,15 +769,6 @@ func TestAuth_UsernameSync(t *testing.T) {
 	if newNameSent != "New Name" {
 		t.Errorf("expected new name %q, got %q", "New Name", newNameSent)
 	}
-
-	// Verify DB was updated.
-	record, err := database.FindUserBySub("sub-rename")
-	if err != nil {
-		t.Fatalf("failed to find user in db: %v", err)
-	}
-	if record.Name != "New Name" {
-		t.Errorf("expected DB name %q, got %q", "New Name", record.Name)
-	}
 }
 
 // TestAuth_AdminManualEmbyRename verifies that an admin rename in Emby does not
@@ -806,7 +791,7 @@ func TestAuth_AdminManualEmbyRename(t *testing.T) {
 		storedPass    = "storedpw"
 	)
 
-	err = database.InsertUser(oidcSub, preferredName, "alice@example.com", embyUserID, storedPass)
+	err = database.InsertUser(oidcSub, embyUserID, storedPass)
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -1231,7 +1216,7 @@ func TestAuth_PolicyUpdateSkippedWhenAlreadyCorrect(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-policy-skip", "PolicySkip", "policyskip@example.com", "policy-skip-1", "skippass")
+	err = database.InsertUser("sub-policy-skip", "policy-skip-1", "skippass")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -1311,7 +1296,7 @@ func TestAuth_PolicyUpdateCalledWhenDisabled(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-policy-disabled", "PolicyDisabled", "policydisabled@example.com", "policy-disabled-1", "disabledpass")
+	err = database.InsertUser("sub-policy-disabled", "policy-disabled-1", "disabledpass")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -1393,7 +1378,7 @@ func TestAuth_PolicyUpdateCalledWhenPrefAccessEnabled(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-policy-pref", "PolicyPref", "policypref@example.com", "policy-pref-1", "prefpass")
+	err = database.InsertUser("sub-policy-pref", "policy-pref-1", "prefpass")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}

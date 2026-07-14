@@ -197,7 +197,7 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-existing", "Existing User", "existing@example.com", "emby-user-100", "mypassw1")
+	err = database.InsertUser("sub-existing", "emby-user-100", "mypassw1")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestIntegration_RequestBodyPreserved(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-body", "Body User", "body@example.com", "emby-body-user", "bodypass1")
+	err = database.InsertUser("sub-body", "emby-body-user", "bodypass1")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestIntegration_AuthTokenForwardedToProxy(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-token", "Token User", "token@example.com", "emby-token-user", "tokenpw1")
+	err = database.InsertUser("sub-token", "emby-token-user", "tokenpw1")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}

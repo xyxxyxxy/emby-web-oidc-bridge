@@ -30,7 +30,6 @@ func TestCredentials_RoundTrip(t *testing.T) {
 		sub := rapid.StringMatching(`[a-z0-9]{8,20}`).Draw(t, "sub")
 		username := rapid.StringMatching(`[A-Za-z][A-Za-z0-9 ]{2,19}`).Draw(t, "username")
 		password := rapid.StringMatching(`[a-zA-Z0-9!@#]{8,32}`).Draw(t, "password")
-		email := rapid.StringMatching(`[a-z]{3,10}@[a-z]{3,8}\.[a-z]{2,4}`).Draw(t, "email")
 		userID := rapid.StringMatching(`[a-f0-9]{32}`).Draw(t, "userID")
 
 		// Open a unique in-memory DB and seed the user record
@@ -41,7 +40,7 @@ func TestCredentials_RoundTrip(t *testing.T) {
 		}
 		defer func() { _ = database.Close() }()
 
-		err = database.InsertUser(sub, username, email, userID, password)
+		err = database.InsertUser(sub, userID, password)
 		if err != nil {
 			t.Fatalf("InsertUser failed: %v", err)
 			return

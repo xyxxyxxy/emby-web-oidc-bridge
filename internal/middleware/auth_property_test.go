@@ -17,19 +17,15 @@ func TestUsernameResolutionOrdering(t *testing.T) {
 
 	rapid.Check(t, func(t *rapid.T) {
 		preferredUsername := optionalString.Draw(t, "preferredUsername")
-		name := optionalString.Draw(t, "name")
-		email := optionalString.Draw(t, "email")
 
 		headers := OIDCHeaders{
 			PreferredUsername: preferredUsername,
-			Name:              name,
-			Email:             email,
 		}
 
 		got := headers.embyUsername()
 		if got != preferredUsername {
-			t.Fatalf("embyUsername() = %q, expected %q (preferred_username=%q, name=%q, email=%q)",
-				got, preferredUsername, preferredUsername, name, email)
+			t.Fatalf("embyUsername() = %q, expected %q (preferred_username=%q)",
+				got, preferredUsername, preferredUsername)
 		}
 	})
 }

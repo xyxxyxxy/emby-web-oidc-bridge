@@ -93,7 +93,7 @@ volumes:
 
 ## oauth2-proxy Configuration
 
-The bridge requires oauth2-proxy to forward the JWT ID token (via `set_authorization_header = true`) so it can extract the `sub`, `preferred_username`, `name`, `email`, and `picture` claims. Two deployment modes are supported:
+The bridge requires oauth2-proxy to forward the JWT ID token (via `set_authorization_header = true`) so it can extract the `sub`, `preferred_username`, `email`, and `picture` claims. Two deployment modes are supported:
 
 - **[Upstream mode](examples/upstream-mode/)** (recommended) — oauth2-proxy forwards directly to the bridge
 - **[Forward auth mode](examples/forward-auth-mode/)** — Caddy/Nginx/Traefik handles routing, oauth2-proxy handles auth decisions
@@ -108,9 +108,8 @@ The bridge extracts user identity from the JWT ID token and forwarded headers:
 |---|---|
 | `sub` | Stable user identifier (required) — links OIDC identity to Emby account |
 | `preferred_username` | Emby username (required) |
-| `name` | Display name stored in the bridge database |
-| `email` | Email stored in the bridge database |
 | `picture` | Profile image URL synced to Emby |
+| `email` | Optional — used in auth logs only, not stored in database |
 
 If the preferred username is already taken by another Emby user during account creation, provisioning fails.
 
@@ -129,10 +128,10 @@ Both deployment modes support profile image sync when configured correctly. Your
 1. Request arrives from oauth2-proxy with identity headers / JWT
 2. Bridge checks source IP against `TRUSTED_PROXIES` (403 if untrusted)
 3. Bridge extracts `sub` claim from headers or JWT (401 if missing)
-4. Bridge resolves Emby username from `preferred_username` > `name` > `email`
+4. Bridge resolves Emby username from `preferred_username`
 5. Bridge looks up user in local SQLite database by `sub`
 6. If new user: provisions in Emby (creates account, sets password, applies template policy)
-7. If existing user with changed name/email: syncs the change to Emby
+7. If existing user with Emby username drift: resets linked account name to `preferred_username`
 8. Authenticates with Emby using stored credentials
 9. Proxies the request to Emby with the authenticated session
 
