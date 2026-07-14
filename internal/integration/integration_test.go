@@ -290,11 +290,14 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 	copy(syncCalls, calls)
 	mu.Unlock()
 
-	if len(syncCalls) < 1 {
-		t.Fatal("expected at least 1 API call")
+	if len(syncCalls) < 2 {
+		t.Fatalf("expected at least 2 API calls, got %d: %v", len(syncCalls), syncCalls)
 	}
-	if syncCalls[0].Method != http.MethodPost || syncCalls[0].Path != "/Users/AuthenticateByName" {
-		t.Errorf("first call should be POST /Users/AuthenticateByName, got %s %s", syncCalls[0].Method, syncCalls[0].Path)
+	if syncCalls[0].Method != http.MethodGet || syncCalls[0].Path != "/Users/emby-user-100" {
+		t.Errorf("first call should be GET /Users/emby-user-100, got %s %s", syncCalls[0].Method, syncCalls[0].Path)
+	}
+	if syncCalls[1].Method != http.MethodPost || syncCalls[1].Path != "/Users/AuthenticateByName" {
+		t.Errorf("second call should be POST /Users/AuthenticateByName, got %s %s", syncCalls[1].Method, syncCalls[1].Path)
 	}
 }
 
