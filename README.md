@@ -16,7 +16,7 @@ A lightweight Go service that enables OIDC single sign-on for Emby's web interfa
 - [Security Model](#security-model)
 - [Policy Management](#policy-management)
 - [Hidden UI Elements](#hidden-ui-elements)
-- [Watchparty Integration](#watchparty-integration)
+- [Watchparty Integration (Experimental)](#watchparty-integration-experimental)
 - [Building](#building)
 - [Development](#development)
 - [License](#license)
@@ -48,7 +48,7 @@ After the first request establishes a session, the bridge reuses the cached Emby
 - Structured log on each session establishment (`emby session established`)
 - Sign Out and Switch User buttons hidden from Emby web UI
 - Account page showing credentials for TV/mobile apps
-- Optional [watchparty integration](#watchparty-integration)
+- Optional, experimental [watchparty integration](#watchparty-integration-experimental)
 - Trusted proxy IP validation
 - Single static binary (~10MB Docker image)
 
@@ -92,7 +92,7 @@ volumes:
 | `BRIDGE_PORT` | No | `8080` | Port the bridge listens on |
 | `DATABASE_PATH` | No | `/data/users.db` | Path to the SQLite database file |
 | `OIDC_ISSUER_URL` | No | — | OIDC issuer URL (enables profile image sync via userinfo/JWT) |
-| `EMBY_WATCHPARTY_URL` | No | — | Internal URL of the [emby-watchparty](https://github.com/Oratorian/emby-watchparty) service (e.g., `http://emby-watchparty:5000`). Enables the `/watchparty/` route when set. |
+| `EMBY_WATCHPARTY_URL` | No | — | **Experimental.** Internal URL of the [emby-watchparty](https://github.com/Oratorian/emby-watchparty) service (e.g., `http://emby-watchparty:5000`). Enables the `/watchparty/` route when set. |
 
 ## oauth2-proxy Configuration
 
@@ -152,7 +152,7 @@ Mid-session avatar changes are applied on the next session establishment. Your O
 | `/account` | Shows generated credentials for TV/mobile apps |
 | `/api/credentials` | Returns authenticated user's Emby credentials as JSON (internal API used by auto-login script and account page) |
 | `/web/index.html` | Emby web UI with injected credentials |
-| `/watchparty/*` | Reverse proxy to watchparty service (optional, enabled when `EMBY_WATCHPARTY_URL` is set) |
+| `/watchparty/*` | **Experimental.** Reverse proxy to watchparty service (optional, enabled when `EMBY_WATCHPARTY_URL` is set) |
 | `/*` | Reverse proxy to Emby (after auth) |
 
 ## Security Model
@@ -191,22 +191,21 @@ The bridge hides the following buttons from the Emby web interface since they do
 
 These buttons are hidden via CSS injected into the Emby web page. They are not removed from the DOM, so admin users accessing Emby directly (not through the bridge) will still see them.
 
-## Watchparty Integration
+## Watchparty Integration (Experimental)
 
-The bridge provides optional integration with [emby-watchparty](https://github.com/Oratorian/emby-watchparty), a synchronized watch-together service for Emby. This feature is disabled by default.
+The bridge provides optional, **experimental** integration with [emby-watchparty](https://github.com/Oratorian/emby-watchparty), a synchronized watch-together service for Emby. This feature is disabled by default and may change as watchparty v2 evolves.
 
-When `EMBY_WATCHPARTY_URL` is set, the bridge serves the watchparty UI at `/watchparty/` and handles authentication automatically. The user's display name is set via localStorage on first visit, and the bridge's auto-login script fills the watchparty login form with the user's Emby credentials.
+When `EMBY_WATCHPARTY_URL` is set, the bridge serves the watchparty UI at `/watchparty/` and handles authentication automatically. The user's display name is set via localStorage on first visit, and the bridge's auto-login script fills credential fields when creating a party.
 
 ### Configuration
 
 The watchparty container (`emby-watchparty`) must be configured with:
 
 - `APP_PREFIX=/watchparty` — required for sub-path routing
-- `REQUIRE_LOGIN=true` — the bridge handles login automatically by injecting credentials into the form
 
-The bridge injects a script into watchparty HTML responses that detects the login form via MutationObserver, fetches credentials from `/api/credentials`, and submits the form. The party creator is automatically made host. No manual login is required.
+In the watchparty admin panel (**Security** section), enable **Require Login to Create Party** (recommended). With this enabled, party creation prompts for Emby credentials; the bridge auto-fills and submits them so the creator becomes host without manual login. This setting is hot-reloadable — no container restart required.
 
-No new environment variables are needed on the bridge side — `EMBY_WATCHPARTY_URL` enables both the proxy and the auto-login behavior.
+The bridge injects a script into watchparty HTML responses that detects login forms via MutationObserver, fetches credentials from `/api/credentials`, and submits the form.
 
 ### Requirements
 

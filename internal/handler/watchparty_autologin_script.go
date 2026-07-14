@@ -1,7 +1,8 @@
 package handler
 
 // watchpartyAutoLoginScript is a self-executing JavaScript function that
-// detects watchparty v2 login forms via MutationObserver, fetches the user's
+// detects watchparty v2 credential forms (e.g. party creation when "Require
+// Login to Create Party" is enabled) via MutationObserver, fetches the user's
 // Emby credentials from the bridge's /api/credentials endpoint, fills the
 // form fields with proper Vue.js reactivity events, and submits.
 const watchpartyAutoLoginScript = `(function() {
