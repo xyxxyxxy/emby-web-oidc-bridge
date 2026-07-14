@@ -75,8 +75,8 @@ func TestAuth_MissingSub(t *testing.T) {
 	}
 }
 
-// TestAuth_MissingNameAndEmail verifies that a request with sub but no name/email returns 401.
-func TestAuth_MissingNameAndEmail(t *testing.T) {
+// TestAuth_MissingPreferredUsername verifies that a request with sub but no preferred_username returns 401.
+func TestAuth_MissingPreferredUsername(t *testing.T) {
 	database, err := db.Open(testDBURI())
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
@@ -92,7 +92,7 @@ func TestAuth_MissingNameAndEmail(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-123")
-	// No name or email.
+	// No preferred_username.
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -127,7 +127,7 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
 
-			// Username should be the name field "Alice".
+			// Username should be the preferred_username "Alice".
 			if body.Username != "Alice" {
 				t.Errorf("expected username Alice, got %s", body.Username)
 			}
@@ -168,6 +168,7 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-alice")
+	req.Header.Set("X-Forwarded-Preferred-Username", "Alice")
 	req.Header.Set("X-Forwarded-User", "Alice")
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	rr := httptest.NewRecorder()
@@ -185,8 +186,83 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 	}
 }
 
+// TestAuth_ExistingUserPreferredUsernameMismatch verifies that existing users
+// authenticate with their linked Emby account name even when preferred_username differs.
+func TestAuth_ExistingUserPreferredUsernameMismatch(t *testing.T) {
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	err = database.InsertUser("sub-admin", "Admin User", "admin@example.com", "admin-user-id", "storedpw")
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/admin-user-id", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "admin-user-id",
+				"Name": "admin@example.com",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Username string `json:"Username"`
+				Pw       string `json:"Pw"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+
+			if body.Username != "admin@example.com" {
+				t.Errorf("expected Emby account name admin@example.com, got %s", body.Username)
+			}
+			if body.Pw != "storedpw" {
+				t.Errorf("expected password storedpw, got %s", body.Pw)
+			}
+
+			resp := map[string]interface{}{
+				"AccessToken": "admin-token",
+				"User":        map[string]interface{}{"Id": "admin-user-id", "Name": "admin@example.com"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/admin-user-id/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Sub", "sub-admin")
+	req.Header.Set("X-Forwarded-Preferred-Username", "admin")
+	req.Header.Set("X-Forwarded-User", "Admin User")
+	req.Header.Set("X-Forwarded-Email", "admin@example.com")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !next.called {
+		t.Error("next handler should have been called")
+	}
+	if next.authToken != "admin-token" {
+		t.Errorf("expected auth token %q, got %q", "admin-token", next.authToken)
+	}
+}
+
 // TestAuth_NewUserProvisioning verifies the full provisioning flow for a brand new user.
-// The Emby username should be the OIDC name field.
+// The Emby username should be the OIDC preferred_username claim.
 func TestAuth_NewUserProvisioning(t *testing.T) {
 	database, err := db.Open(testDBURI())
 	if err != nil {
@@ -257,6 +333,7 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-new")
+	req.Header.Set("X-Forwarded-Preferred-Username", "newuser")
 	req.Header.Set("X-Forwarded-User", "New User")
 	req.Header.Set("X-Forwarded-Email", "newuser@example.com")
 	rr := httptest.NewRecorder()
@@ -272,9 +349,9 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 	if !createCalled {
 		t.Error("CreateUser should have been called")
 	}
-	// Emby username should be the OIDC name, not email.
-	if createdName != "New User" {
-		t.Errorf("expected Emby username %q, got %q", "New User", createdName)
+	// Emby username should be preferred_username, not display name or email.
+	if createdName != "newuser" {
+		t.Errorf("expected Emby username %q, got %q", "newuser", createdName)
 	}
 	if next.authToken != "new-token-xyz" {
 		t.Errorf("expected auth token %q, got %q", "new-token-xyz", next.authToken)
@@ -291,62 +368,23 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 	if record.EmbyUserID != "new-user-456" {
 		t.Errorf("expected emby_user_id %q, got %q", "new-user-456", record.EmbyUserID)
 	}
-	if record.Name != "New User" {
-		t.Errorf("expected name %q, got %q", "New User", record.Name)
+	if record.Name != "newuser" {
+		t.Errorf("expected name %q, got %q", "newuser", record.Name)
 	}
 	if record.Email != "newuser@example.com" {
 		t.Errorf("expected email %q, got %q", "newuser@example.com", record.Email)
 	}
 }
 
-// TestAuth_EmailFallbackAsUsername verifies that email is used as Emby username when name is empty.
-func TestAuth_EmailFallbackAsUsername(t *testing.T) {
+// TestAuth_EmailNotUsedAsUsername verifies that email alone is rejected without preferred_username.
+func TestAuth_EmailNotUsedAsUsername(t *testing.T) {
 	database, err := db.Open(testDBURI())
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
 	}
 	defer func() { _ = database.Close() }()
 
-	var createdName string
-
-	srv := setupEmbyServer(func(mux *http.ServeMux) {
-		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
-			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
-		})
-		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
-			var body struct{ Name string `json:"Name"` }
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			createdName = body.Name
-			resp := map[string]interface{}{"Id": "email-user-1", "Name": body.Name}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
-		})
-		mux.HandleFunc("/Users/email-user-1/Password", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusNoContent)
-		})
-		mux.HandleFunc("/Users/email-user-1/Policy", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusNoContent)
-		})
-		mux.HandleFunc("/Users/email-user-1", func(w http.ResponseWriter, r *http.Request) {
-			resp := map[string]interface{}{
-				"Id": "email-user-1", "Name": "emailonly@example.com",
-				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
-		})
-		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
-			resp := map[string]interface{}{
-				"AccessToken": "email-token",
-				"User":        map[string]interface{}{"Id": "email-user-1", "Name": "emailonly@example.com"},
-				"ServerId":    "server-1",
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
-		})
-	})
+	srv := setupEmbyServer(func(mux *http.ServeMux) {})
 	defer srv.Close()
 
 	client := emby.NewClient(srv.URL, "test-key")
@@ -356,16 +394,15 @@ func TestAuth_EmailFallbackAsUsername(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-emailonly")
 	req.Header.Set("X-Forwarded-Email", "emailonly@example.com")
-	// No X-Forwarded-User — email should be used as username.
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected status %d, got %d", http.StatusUnauthorized, rr.Code)
 	}
-	if createdName != "emailonly@example.com" {
-		t.Errorf("expected Emby username %q (email fallback), got %q", "emailonly@example.com", createdName)
+	if next.called {
+		t.Error("next handler should not have been called")
 	}
 }
 
@@ -422,6 +459,7 @@ func TestAuth_AdoptedUser(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-adopted")
+	req.Header.Set("X-Forwarded-Preferred-Username", "Adopted User")
 	req.Header.Set("X-Forwarded-User", "Adopted User")
 	req.Header.Set("X-Forwarded-Email", "adopted@example.com")
 	rr := httptest.NewRecorder()
@@ -471,6 +509,7 @@ func TestAuth_EmbyUnreachable(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-unreachable")
+	req.Header.Set("X-Forwarded-Preferred-Username", "unreachable")
 	req.Header.Set("X-Forwarded-Email", "unreachable@example.com")
 	rr := httptest.NewRecorder()
 
@@ -510,6 +549,7 @@ func TestAuth_UserCreationFailure(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-failcreate")
+	req.Header.Set("X-Forwarded-Preferred-Username", "failcreate")
 	req.Header.Set("X-Forwarded-Email", "failcreate@example.com")
 	rr := httptest.NewRecorder()
 
@@ -572,6 +612,7 @@ func TestAuth_AuthTokenInContext(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-ctx")
+	req.Header.Set("X-Forwarded-Preferred-Username", "Context User")
 	req.Header.Set("X-Forwarded-User", "Context User")
 	req.Header.Set("X-Forwarded-Email", "context@example.com")
 	rr := httptest.NewRecorder()
@@ -601,7 +642,7 @@ func TestAuth_SubFromJWT(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(resp)
 		})
 		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
-			resp := map[string]interface{}{"Id": "jwt-user-1", "Name": "jwt@example.com"}
+			resp := map[string]interface{}{"Id": "jwt-user-1", "Name": "jwtuser"}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
 		})
@@ -613,7 +654,7 @@ func TestAuth_SubFromJWT(t *testing.T) {
 		})
 		mux.HandleFunc("/Users/jwt-user-1", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{
-				"Id": "jwt-user-1", "Name": "jwt@example.com",
+				"Id": "jwt-user-1", "Name": "jwtuser",
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -622,7 +663,7 @@ func TestAuth_SubFromJWT(t *testing.T) {
 		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{
 				"AccessToken": "jwt-token",
-				"User":        map[string]interface{}{"Id": "jwt-user-1", "Name": "jwt@example.com"},
+				"User":        map[string]interface{}{"Id": "jwt-user-1", "Name": "jwtuser"},
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -635,9 +676,9 @@ func TestAuth_SubFromJWT(t *testing.T) {
 	next := &nextHandler{}
 	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
 
-	// Build a JWT with sub and email claims (no name).
+	// Build a JWT with sub and preferred_username claims.
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"jwt-sub-001","email":"jwt@example.com"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"jwt-sub-001","preferred_username":"jwtuser","email":"jwt@example.com"}`))
 	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesig"))
 	jwtToken := header + "." + payload + "." + signature
 
@@ -721,6 +762,7 @@ func TestAuth_UsernameSync(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-rename")
+	req.Header.Set("X-Forwarded-Preferred-Username", "New Name")
 	req.Header.Set("X-Forwarded-User", "New Name")
 	req.Header.Set("X-Forwarded-Email", "user@example.com")
 	rr := httptest.NewRecorder()
@@ -948,9 +990,8 @@ func TestAuth_PreferredUsernameOverName(t *testing.T) {
 	}
 }
 
-// TestAuth_UniquenessFallback verifies that if the preferred username fails during
-// creation (name conflict), the bridge falls through to the next candidate.
-func TestAuth_UniquenessFallback(t *testing.T) {
+// TestAuth_UsernameCreationConflict verifies that user creation fails when the preferred username is taken.
+func TestAuth_UsernameCreationConflict(t *testing.T) {
 	database, err := db.Open(testDBURI())
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
@@ -960,51 +1001,16 @@ func TestAuth_UniquenessFallback(t *testing.T) {
 	var createdNames []string
 
 	srv := setupEmbyServer(func(mux *http.ServeMux) {
-		// FindUserByName — no users found (name appears available).
 		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
 		})
-		// CreateUser — first call with "johndoe" fails (race condition: name taken),
-		// second call with "John Doe" also fails, third with email succeeds.
 		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
 			var body struct{ Name string `json:"Name"` }
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			createdNames = append(createdNames, body.Name)
-
-			if body.Name == "johndoe" || body.Name == "John Doe" {
-				// Simulate name conflict.
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			// Email fallback succeeds.
-			resp := map[string]interface{}{"Id": "fallback-user-1", "Name": body.Name}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
-		})
-		mux.HandleFunc("/Users/fallback-user-1/Password", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusNoContent)
-		})
-		mux.HandleFunc("/Users/fallback-user-1/Policy", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusNoContent)
-		})
-		mux.HandleFunc("/Users/fallback-user-1", func(w http.ResponseWriter, r *http.Request) {
-			resp := map[string]interface{}{
-				"Id": "fallback-user-1", "Name": "john@example.com",
-				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
-		})
-		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
-			resp := map[string]interface{}{
-				"AccessToken": "fallback-token",
-				"User":        map[string]interface{}{"Id": "fallback-user-1", "Name": "john@example.com"},
-				"ServerId":    "server-1",
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
+			w.WriteHeader(http.StatusBadRequest)
 		})
 	})
 	defer srv.Close()
@@ -1022,25 +1028,17 @@ func TestAuth_UniquenessFallback(t *testing.T) {
 
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, rr.Code)
 	}
-	if !next.called {
-		t.Error("next handler should have been called")
+	if next.called {
+		t.Error("next handler should not have been called")
 	}
-
-	// Should have tried johndoe, then John Doe, then john@example.com.
-	if len(createdNames) != 3 {
-		t.Fatalf("expected 3 creation attempts, got %d: %v", len(createdNames), createdNames)
+	if len(createdNames) != 1 {
+		t.Fatalf("expected 1 creation attempt, got %d: %v", len(createdNames), createdNames)
 	}
 	if createdNames[0] != "johndoe" {
-		t.Errorf("first attempt should be 'johndoe', got %q", createdNames[0])
-	}
-	if createdNames[1] != "John Doe" {
-		t.Errorf("second attempt should be 'John Doe', got %q", createdNames[1])
-	}
-	if createdNames[2] != "john@example.com" {
-		t.Errorf("third attempt should be 'john@example.com', got %q", createdNames[2])
+		t.Errorf("creation attempt should be 'johndoe', got %q", createdNames[0])
 	}
 }
 
@@ -1102,6 +1100,7 @@ func TestAuth_PolicyUpdateSkippedWhenAlreadyCorrect(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-policy-skip")
+	req.Header.Set("X-Forwarded-Preferred-Username", "PolicySkip")
 	req.Header.Set("X-Forwarded-User", "PolicySkip")
 	req.Header.Set("X-Forwarded-Email", "policyskip@example.com")
 	rr := httptest.NewRecorder()
@@ -1185,6 +1184,7 @@ func TestAuth_PolicyUpdateCalledWhenDisabled(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-policy-disabled")
+	req.Header.Set("X-Forwarded-Preferred-Username", "PolicyDisabled")
 	req.Header.Set("X-Forwarded-User", "PolicyDisabled")
 	req.Header.Set("X-Forwarded-Email", "policydisabled@example.com")
 	rr := httptest.NewRecorder()
@@ -1266,6 +1266,7 @@ func TestAuth_PolicyUpdateCalledWhenPrefAccessEnabled(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-policy-pref")
+	req.Header.Set("X-Forwarded-Preferred-Username", "PolicyPref")
 	req.Header.Set("X-Forwarded-User", "PolicyPref")
 	req.Header.Set("X-Forwarded-Email", "policypref@example.com")
 	rr := httptest.NewRecorder()

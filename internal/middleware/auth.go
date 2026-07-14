@@ -117,31 +117,9 @@ type OIDCHeaders struct {
 	PictureURL        string
 }
 
-// usernameCandiates returns the ordered list of candidate Emby usernames:
-// preferred_username > name > email.
-func (h *OIDCHeaders) usernameCandidates() []string {
-	var candidates []string
-	if h.PreferredUsername != "" {
-		candidates = append(candidates, h.PreferredUsername)
-	}
-	if h.Name != "" && h.Name != h.PreferredUsername {
-		candidates = append(candidates, h.Name)
-	}
-	if h.Email != "" && h.Email != h.PreferredUsername && h.Email != h.Name {
-		candidates = append(candidates, h.Email)
-	}
-	return candidates
-}
-
-// embyUsername returns the first candidate username (preferred_username > name > email).
+// embyUsername returns the OIDC preferred_username claim, used as the Emby username.
 func (h *OIDCHeaders) embyUsername() string {
-	if h.PreferredUsername != "" {
-		return h.PreferredUsername
-	}
-	if h.Name != "" {
-		return h.Name
-	}
-	return h.Email
+	return h.PreferredUsername
 }
 
 // displayName returns the best display name for logging/DB storage.
@@ -155,7 +133,7 @@ func (h *OIDCHeaders) displayName() string {
 
 // Auth returns middleware that extracts headers, provisions users, and authenticates with Emby.
 // Users are identified by their OIDC sub (subject) claim. The Emby account username is set to
-// the OIDC name field, falling back to email. Username and email changes are synced automatically.
+// the OIDC preferred_username claim. Name and email changes are synced automatically.
 func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templatePolicy []byte, oidcIssuerURL string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -254,13 +232,13 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				return
 			}
 
-			// At least one of name or email is required for the Emby username.
+			// preferred_username is required for the Emby username.
 			if headers.embyUsername() == "" {
-				slog.Warn("missing both name and email from OIDC",
+				slog.Warn("missing preferred_username from OIDC",
 					"sub", headers.Sub,
 					"remote_addr", r.RemoteAddr,
 				)
-				http.Error(w, "Unauthorized: missing name and email", http.StatusUnauthorized)
+				http.Error(w, "Unauthorized: missing preferred_username", http.StatusUnauthorized)
 				return
 			}
 
@@ -339,15 +317,17 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					"emby_user_id", embyUserID,
 				)
 
-				// Sync name/email changes from OIDC to the bridge DB and Emby.
-				oldEmbyUsername := record.Name
-				if oldEmbyUsername == "" {
-					oldEmbyUsername = record.Email
+				// Authenticate with the linked Emby account's actual username, which may
+				// differ from OIDC preferred_username (e.g. after a username mapping change).
+				if embyUser, getErr := embyClient.GetUser(ctx, embyUserID); getErr == nil {
+					embyUsername = embyUser.Name
 				}
-				nameChanged := headers.displayName() != record.Name || headers.Email != record.Email
 
+				desiredUsername := headers.embyUsername()
+
+				// Sync name/email changes from OIDC to the bridge DB.
+				nameChanged := headers.displayName() != record.Name || headers.Email != record.Email
 				if nameChanged {
-					// Update the bridge DB with new name/email.
 					if err := database.UpdateUserIdentity(headers.Sub, headers.displayName(), headers.Email); err != nil {
 						slog.Error("failed to update user identity in database",
 							"sub", headers.Sub,
@@ -355,58 +335,39 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						)
 						// Non-fatal: continue with auth.
 					}
+				}
 
-					// If the Emby username changed, rename the user in Emby.
-					// Try candidates in order; if the preferred one is taken, fall through.
-					if embyUsername != oldEmbyUsername {
-						newName := embyUsername
-						// Check if the desired name is already taken by another user.
-						existingUser, lookupErr := embyClient.FindUserByName(ctx, newName)
-						if lookupErr == nil && existingUser != nil && existingUser.ID != embyUserID {
-							// Name is taken — try fallback candidates.
-							for _, candidate := range headers.usernameCandidates() {
-								if candidate == newName {
-									continue
-								}
-								eu, err := embyClient.FindUserByName(ctx, candidate)
-								if err != nil {
-									break // Can't check, keep current name.
-								}
-								if eu == nil || eu.ID == embyUserID {
-									newName = candidate
-									break
-								}
-							}
-						}
+				// Sync Emby username to preferred_username when possible.
+				if desiredUsername != "" && desiredUsername != embyUsername {
+					newName := desiredUsername
+					existingUser, lookupErr := embyClient.FindUserByName(ctx, newName)
+					if lookupErr == nil && existingUser != nil && existingUser.ID != embyUserID {
+						// Name is taken — keep the current Emby username.
+						newName = embyUsername
+					}
 
-						if newName != oldEmbyUsername {
-							slog.Info("syncing username change to Emby",
+					if newName != embyUsername {
+						slog.Info("syncing username change to Emby",
+							"sub", headers.Sub,
+							"old_name", embyUsername,
+							"new_name", newName,
+						)
+						if err := embyClient.UpdateUserName(ctx, embyUserID, newName); err != nil {
+							slog.Error("failed to rename user in Emby",
 								"sub", headers.Sub,
-								"old_name", oldEmbyUsername,
+								"emby_user_id", embyUserID,
 								"new_name", newName,
+								"error", err,
 							)
-							if err := embyClient.UpdateUserName(ctx, embyUserID, newName); err != nil {
-								slog.Error("failed to rename user in Emby",
-									"sub", headers.Sub,
-									"emby_user_id", embyUserID,
-									"new_name", newName,
-									"error", err,
-								)
-								// Non-fatal: continue with auth using old name.
-							} else {
-								embyUsername = newName
-							}
+							// Non-fatal: continue with auth using current name.
+						} else {
+							embyUsername = newName
 						}
 					}
 				}
 			} else {
-				// User not in DB — try to provision with the most preferred username.
-				// Candidate order: preferred_username > name > email.
-				// If the preferred name already exists in Emby, adopt that user.
-				// If creation fails due to a name conflict, fall through to the next candidate.
-				candidates := headers.usernameCandidates()
-				embyUsername = candidates[0] // At least one candidate is guaranteed (email).
-
+				// User not in DB — provision with the OIDC preferred_username.
+				// If that username already exists in Emby, adopt that user.
 				existingUser, err := embyClient.FindUserByName(ctx, embyUsername)
 				if err != nil {
 					slog.Error("emby user lookup failed",
@@ -442,30 +403,16 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					}
 				} else {
 					// User doesn't exist anywhere — create new user.
-					// Try candidates in order; if creation fails (name conflict), try next.
 					slog.Info("provisioning new user",
 						"sub", headers.Sub,
 						"username", embyUsername,
 					)
 
-					var newUser *emby.User
-					var createErr error
-					for _, candidate := range candidates {
-						newUser, createErr = embyClient.CreateUser(ctx, candidate, templateUserID)
-						if createErr == nil {
-							embyUsername = candidate
-							break
-						}
-						// If creation failed, try the next candidate.
-						slog.Warn("username taken, trying next candidate",
-							"sub", headers.Sub,
-							"tried", candidate,
-							"error", createErr,
-						)
-					}
+					newUser, createErr := embyClient.CreateUser(ctx, embyUsername, templateUserID)
 					if createErr != nil {
-						slog.Error("failed to create user in Emby (all candidates exhausted)",
+						slog.Error("failed to create user in Emby",
 							"sub", headers.Sub,
+							"username", embyUsername,
 							"error", createErr,
 						)
 						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -529,24 +476,16 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				// If user was in DB but auth failed, they may have been deleted from Emby.
 				// Check if user still exists and re-provision if needed.
 				if record != nil {
+					staleEmbyUserID := embyUserID
+
 					slog.Warn("authentication failed for existing DB user, checking if user was deleted from Emby",
 						"sub", headers.Sub,
-						"emby_user_id", embyUserID,
+						"emby_user_id", staleEmbyUserID,
 						"error", err,
 					)
 
 					// Delete stale cache entry.
 					sessionCache.Delete(headers.Sub)
-
-					existingUser, lookupErr := embyClient.FindUserByName(ctx, embyUsername)
-					if lookupErr != nil {
-						slog.Error("emby user lookup failed during re-provision check",
-							"sub", headers.Sub,
-							"error", lookupErr,
-						)
-						http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
-						return
-					}
 
 					// Delete stale DB record.
 					if delErr := database.DeleteUser(headers.Sub); delErr != nil {
@@ -558,11 +497,36 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						return
 					}
 
+					// Prefer the previously linked Emby account over creating a duplicate.
+					var existingUser *emby.User
+					if staleEmbyUserID != "" {
+						linkedUser, getErr := embyClient.GetUser(ctx, staleEmbyUserID)
+						if getErr == nil {
+							existingUser = linkedUser
+							embyUsername = linkedUser.Name
+						}
+					}
+					if existingUser == nil {
+						var lookupErr error
+						existingUser, lookupErr = embyClient.FindUserByName(ctx, headers.embyUsername())
+						if lookupErr != nil {
+							slog.Error("emby user lookup failed during re-provision check",
+								"sub", headers.Sub,
+								"error", lookupErr,
+							)
+							http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+							return
+						}
+						if existingUser != nil {
+							embyUsername = existingUser.Name
+						}
+					}
+
 					// Generate a new password and re-provision.
 					userPassword = password.Generate()
 
 					if existingUser != nil {
-						// User still exists in Emby (password mismatch or disabled) — update password and re-enable.
+						// User still exists in Emby — update password only; preserve existing policy.
 						embyUserID = existingUser.ID
 						slog.Warn("re-adopting Emby user after auth failure",
 							"sub", headers.Sub,
@@ -575,16 +539,6 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 							)
 							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 							return
-						}
-						// Re-enable user in case they were disabled.
-						policyJSON, polBuildErr := buildUserPolicy(templatePolicy)
-						if polBuildErr == nil {
-							if polErr := embyClient.UpdatePolicyRaw(ctx, embyUserID, policyJSON); polErr != nil {
-								slog.Warn("failed to re-enable user during re-adoption",
-									"sub", headers.Sub,
-									"error", polErr,
-								)
-							}
 						}
 					} else {
 						// User was deleted from Emby — create fresh.

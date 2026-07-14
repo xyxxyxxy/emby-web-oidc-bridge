@@ -75,13 +75,13 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 				CopyFromUserID string `json:"CopyFromUserId"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body.Name != "New User" {
-				t.Errorf("CreateUser: expected Name 'New User', got %q", body.Name)
+			if body.Name != "newuser" {
+				t.Errorf("CreateUser: expected Name 'newuser', got %q", body.Name)
 			}
 			if body.CopyFromUserID != "template-id-001" {
 				t.Errorf("CreateUser: expected CopyFromUserId 'template-id-001', got %q", body.CopyFromUserID)
 			}
-			resp := map[string]interface{}{"Id": "created-user-001", "Name": "New User"}
+			resp := map[string]interface{}{"Id": "created-user-001", "Name": "newuser"}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
 
@@ -93,7 +93,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 
 		case r.Method == http.MethodGet && r.URL.Path == "/Users/created-user-001":
 			resp := map[string]interface{}{
-				"Id": "created-user-001", "Name": "New User",
+				"Id": "created-user-001", "Name": "newuser",
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -102,7 +102,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/Users/AuthenticateByName":
 			resp := map[string]interface{}{
 				"AccessToken": "new-user-token-xyz",
-				"User":        map[string]interface{}{"Id": "created-user-001", "Name": "New User"},
+				"User":        map[string]interface{}{"Id": "created-user-001", "Name": "newuser"},
 				"ServerId":    "server-1",
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -131,6 +131,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/Items/123", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Forwarded-Sub", "sub-new-integration")
+	req.Header.Set("X-Forwarded-Preferred-Username", "newuser")
 	req.Header.Set("X-Forwarded-User", "New User")
 	req.Header.Set("X-Forwarded-Email", "newuser@example.com")
 	rec := httptest.NewRecorder()
@@ -158,7 +159,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 	expectedOrder := []apiCall{
 		{Method: http.MethodGet, Path: "/Users/Query"},
 		{Method: http.MethodPost, Path: "/Users/New"},
-		{Method: http.MethodPost, Path: "/Users/created-user-001/Password"},
+		{Method: http.MethodGet, Path: "/Users/created-user-001"},
 		{Method: http.MethodPost, Path: "/Users/created-user-001/Password"},
 		{Method: http.MethodPost, Path: "/Users/created-user-001/Policy"},
 		{Method: http.MethodPost, Path: "/Users/AuthenticateByName"},
@@ -264,6 +265,7 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/web/index.html", nil)
 	req.RemoteAddr = "127.0.0.1:54321"
 	req.Header.Set("X-Forwarded-Sub", "sub-existing")
+	req.Header.Set("X-Forwarded-Preferred-Username", "Existing User")
 	req.Header.Set("X-Forwarded-User", "Existing User")
 	req.Header.Set("X-Forwarded-Email", "existing@example.com")
 	rec := httptest.NewRecorder()
@@ -367,6 +369,7 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/Library", nil)
 	req.RemoteAddr = "127.0.0.1:9999"
 	req.Header.Set("X-Forwarded-Sub", "sub-adopted-int")
+	req.Header.Set("X-Forwarded-Preferred-Username", "Adopted User")
 	req.Header.Set("X-Forwarded-User", "Adopted User")
 	req.Header.Set("X-Forwarded-Email", "adopted@example.com")
 	rec := httptest.NewRecorder()
@@ -390,7 +393,7 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 
 	expectedOrder := []apiCall{
 		{Method: http.MethodGet, Path: "/Users/Query"},
-		{Method: http.MethodPost, Path: "/Users/adopted-emby-555/Password"},
+		{Method: http.MethodGet, Path: "/Users/adopted-emby-555"},
 		{Method: http.MethodPost, Path: "/Users/adopted-emby-555/Password"},
 		{Method: http.MethodPost, Path: "/Users/AuthenticateByName"},
 	}
@@ -478,6 +481,7 @@ func TestIntegration_RequestBodyPreserved(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/Items/Query", strings.NewReader(bodyContent))
 	req.RemoteAddr = "127.0.0.1:11111"
 	req.Header.Set("X-Forwarded-Sub", "sub-body")
+	req.Header.Set("X-Forwarded-Preferred-Username", "Body User")
 	req.Header.Set("X-Forwarded-User", "Body User")
 	req.Header.Set("X-Forwarded-Email", "body@example.com")
 	req.Header.Set("Content-Type", "application/json")
@@ -548,6 +552,7 @@ func TestIntegration_AuthTokenForwardedToProxy(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/Items", nil)
 	req.RemoteAddr = "127.0.0.1:22222"
 	req.Header.Set("X-Forwarded-Sub", "sub-token")
+	req.Header.Set("X-Forwarded-Preferred-Username", "Token User")
 	req.Header.Set("X-Forwarded-User", "Token User")
 	req.Header.Set("X-Forwarded-Email", "token@example.com")
 	rec := httptest.NewRecorder()

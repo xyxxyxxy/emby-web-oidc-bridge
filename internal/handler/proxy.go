@@ -63,13 +63,13 @@ func AuthSubFromContext(ctx context.Context) string {
 	return sub
 }
 
-// WithAuthUsername stores the resolved OIDC display name in context.
+// WithAuthUsername stores the resolved OIDC preferred_username in context.
 // This is used by the watchparty handler to inject the username into HTML responses.
 func WithAuthUsername(ctx context.Context, username string) context.Context {
 	return context.WithValue(ctx, authUsernameKey, username)
 }
 
-// AuthUsernameFromContext retrieves the resolved OIDC display name from the request context.
+// AuthUsernameFromContext retrieves the resolved OIDC preferred_username from the request context.
 // Returns an empty string if no username is present.
 func AuthUsernameFromContext(ctx context.Context) string {
 	u, _ := ctx.Value(authUsernameKey).(string)

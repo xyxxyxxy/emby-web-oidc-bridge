@@ -136,6 +136,7 @@ func TestIntegrationError_EmbyAPIUnreachable(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Forwarded-Sub", "sub-unreachable")
+	req.Header.Set("X-Forwarded-Preferred-Username", "unreachable")
 	req.Header.Set("X-Forwarded-Email", "unreachable@example.com")
 	rec := httptest.NewRecorder()
 
@@ -181,6 +182,7 @@ func TestIntegrationError_UserCreationFailure(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Forwarded-Sub", "sub-failcreate")
+	req.Header.Set("X-Forwarded-Preferred-Username", "failcreate")
 	req.Header.Set("X-Forwarded-Email", "failcreate@example.com")
 	rec := httptest.NewRecorder()
 
