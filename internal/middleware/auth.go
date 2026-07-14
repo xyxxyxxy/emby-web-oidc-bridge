@@ -22,6 +22,10 @@ import (
 // to prevent concurrent goroutines from hitting rate limits.
 var pictureSyncInFlight sync.Map
 
+// usernameRenameLocks serializes Emby username resets per linked account so
+// parallel auth requests after cache invalidation do not race UpdateUserName.
+var usernameRenameLocks sync.Map
+
 // sessionCache stores cached auth sessions per OIDC sub to avoid
 // re-authenticating with Emby on every request.
 // Key: oidc_sub (string), Value: *cachedSession
@@ -136,11 +140,28 @@ func (e *UsernameConflictError) Error() string {
 	)
 }
 
+func usernameRenameLock(embyUserID string) *sync.Mutex {
+	lock, _ := usernameRenameLocks.LoadOrStore(embyUserID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
 // syncEmbyUsernameToPreferred resets the linked Emby account name to the OIDC
 // preferred_username when it differs. Returns the name to use for authentication.
 // Invalidates the session cache when a rename is applied so stale tokens are not reused.
 func syncEmbyUsernameToPreferred(ctx context.Context, embyClient *emby.Client, sub, embyUserID, currentName, desiredName string) (string, error) {
 	if desiredName == "" || desiredName == currentName {
+		return currentName, nil
+	}
+
+	mu := usernameRenameLock(embyUserID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	// Another request may have renamed while we waited for the lock.
+	if embyUser, getErr := embyClient.GetUser(ctx, embyUserID); getErr == nil {
+		currentName = embyUser.Name
+	}
+	if desiredName == currentName {
 		return currentName, nil
 	}
 
@@ -169,6 +190,10 @@ func syncEmbyUsernameToPreferred(ctx context.Context, embyClient *emby.Client, s
 	InvalidateSession(sub)
 
 	if err := embyClient.UpdateUserName(ctx, embyUserID, newName); err != nil {
+		// Concurrent rename may have succeeded before Emby returned an error.
+		if embyUser, getErr := embyClient.GetUser(ctx, embyUserID); getErr == nil && embyUser.Name == newName {
+			return newName, nil
+		}
 		slog.Error("failed to rename user in Emby",
 			"sub", sub,
 			"emby_user_id", embyUserID,

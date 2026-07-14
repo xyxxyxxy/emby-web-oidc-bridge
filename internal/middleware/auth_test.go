@@ -951,6 +951,120 @@ func TestAuth_AdminManualEmbyRename(t *testing.T) {
 	}
 }
 
+// TestAuth_ConcurrentUsernameRename verifies parallel auth after admin rename
+// performs a single Emby rename and both requests succeed.
+func TestAuth_ConcurrentUsernameRename(t *testing.T) {
+	middleware.ClearSessionCache()
+
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	const (
+		oidcSub       = "sub-concurrent-rename"
+		preferredName = "alice"
+		adminRenamed  = "bob"
+		embyUserID    = "emby-concurrent-1"
+		storedPass    = "storedpw"
+	)
+
+	err = database.InsertUser(oidcSub, embyUserID, storedPass)
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	var (
+		embyNameMu   sync.Mutex
+		embyName     = adminRenamed
+		renameCount  int32
+	)
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("GET /Users/"+embyUserID, func(w http.ResponseWriter, r *http.Request) {
+			embyNameMu.Lock()
+			name := embyName
+			embyNameMu.Unlock()
+			resp := map[string]interface{}{
+				"Id":   embyUserID,
+				"Name": name,
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("POST /Users/"+embyUserID, func(w http.ResponseWriter, r *http.Request) {
+			count := atomic.AddInt32(&renameCount, 1)
+			if count > 1 {
+				http.Error(w, "duplicate rename", http.StatusInternalServerError)
+				return
+			}
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			embyNameMu.Lock()
+			embyName = body["Name"]
+			embyNameMu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.HandleFunc("/Users/"+embyUserID+"/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "concurrent-token",
+				"User":        map[string]interface{}{"Id": embyUserID, "Name": preferredName},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	makeReq := func() *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Forwarded-Sub", oidcSub)
+		req.Header.Set("X-Forwarded-Preferred-Username", preferredName)
+		return req
+	}
+
+	var wg sync.WaitGroup
+	results := make([]int, 2)
+	for i := range results {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, makeReq())
+			results[idx] = rr.Code
+		}(i)
+	}
+	wg.Wait()
+
+	for i, code := range results {
+		if code != http.StatusOK {
+			t.Fatalf("request %d: expected status %d, got %d", i, http.StatusOK, code)
+		}
+	}
+	if got := atomic.LoadInt32(&renameCount); got != 1 {
+		t.Fatalf("expected exactly 1 rename call, got %d", got)
+	}
+}
+
 // TestExtractPictureFromJWT_ValidToken verifies picture extraction from a valid JWT payload.
 func TestExtractPictureFromJWT_ValidToken(t *testing.T) {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
