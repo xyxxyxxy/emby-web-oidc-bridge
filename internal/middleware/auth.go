@@ -736,9 +736,13 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					return
 				}
 
-				policy["IsDisabled"] = false
-				policy["EnableUserPreferenceAccess"] = false
-				updatedPolicy, marshalErr := json.Marshal(policy)
+				// Only send fields we enforce. IsAdministrator is never included —
+				// Emby treats omitted bools as false on full policy POST.
+				enforcedPolicy := map[string]interface{}{
+					"IsDisabled":                 false,
+					"EnableUserPreferenceAccess": false,
+				}
+				updatedPolicy, marshalErr := json.Marshal(enforcedPolicy)
 				if marshalErr != nil {
 					return
 				}

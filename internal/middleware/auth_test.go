@@ -1448,3 +1448,84 @@ func TestAuth_PolicyUpdateCalledWhenPrefAccessEnabled(t *testing.T) {
 		t.Fatal("timed out waiting for policy update call")
 	}
 }
+
+// TestAuth_PolicyEnforcementPreservesAdministrator verifies that policy enforcement
+// still runs for administrators but never includes IsAdministrator in the update.
+func TestAuth_PolicyEnforcementPreservesAdministrator(t *testing.T) {
+	middleware.ClearSessionCache()
+
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	err = database.InsertUser("sub-policy-admin", "policy-admin-1", "adminpass")
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	policyUpdateCalled := make(chan struct{}, 1)
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "admin-token",
+				"User":        map[string]interface{}{"Id": "policy-admin-1", "Name": "PolicyAdmin"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("GET /Users/policy-admin-1", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   "policy-admin-1",
+				"Name": "PolicyAdmin",
+				"Policy": map[string]interface{}{
+					"IsAdministrator":            true,
+					"IsDisabled":                 false,
+					"IsHidden":                   false,
+					"EnableUserPreferenceAccess": true,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("POST /Users/policy-admin-1/Policy", func(w http.ResponseWriter, r *http.Request) {
+			var policy map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&policy)
+			if _, ok := policy["IsAdministrator"]; ok {
+				t.Error("IsAdministrator must not be included in policy update")
+			}
+			if prefAccess, ok := policy["EnableUserPreferenceAccess"].(bool); !ok || prefAccess {
+				t.Errorf("EnableUserPreferenceAccess = %v, want false", policy["EnableUserPreferenceAccess"])
+			}
+			policyUpdateCalled <- struct{}{}
+			w.WriteHeader(http.StatusNoContent)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Sub", "sub-policy-admin")
+	req.Header.Set("X-Forwarded-Preferred-Username", "PolicyAdmin")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+
+	timeout := time.After(5 * time.Second)
+	select {
+	case <-policyUpdateCalled:
+		// Expected: admin policy updated without touching IsAdministrator.
+	case <-timeout:
+		t.Fatal("timed out waiting for policy update call")
+	}
+}
