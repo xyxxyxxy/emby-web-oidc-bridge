@@ -10,6 +10,8 @@ A lightweight Go service that enables OIDC single sign-on for Emby's web interfa
 - [Environment Variables](#environment-variables)
 - [oauth2-proxy Configuration](#oauth2-proxy-configuration)
   - [Identity Resolution](#identity-resolution)
+  - [Username Changes at the IdP](#username-changes-at-the-idp)
+  - [Multi-Subdomain SSO](#multi-subdomain-sso)
   - [Profile Image Sync](#profile-image-sync)
   - [Request Flow](#request-flow)
   - [Routes](#routes)
@@ -96,7 +98,7 @@ volumes:
 
 ## oauth2-proxy Configuration
 
-The bridge requires oauth2-proxy to forward the JWT ID token (via `set_authorization_header = true`) so it can extract the `sub`, `preferred_username`, `email`, and `picture` claims. Two deployment modes are supported:
+The bridge requires oauth2-proxy to forward the JWT ID token (via `set_authorization_header = true`) and identity headers (via `pass_user_headers = true` and `pass_access_token = true`) so it can extract the `sub`, `preferred_username`, `email`, and `picture` claims. Two deployment modes are supported:
 
 - **[Upstream mode](examples/upstream-mode/)** (recommended) — oauth2-proxy forwards directly to the bridge
 - **[Forward auth mode](examples/forward-auth-mode/)** — Caddy/Nginx/Traefik handles routing, oauth2-proxy handles auth decisions
@@ -105,7 +107,7 @@ See the example READMEs for complete oauth2-proxy configs, docker-compose files,
 
 ### Identity Resolution
 
-The bridge extracts user identity from the JWT ID token and forwarded headers:
+The bridge resolves identity from the JWT ID token (`Authorization: Bearer …`) and forwarded headers. When both are present, the **ID token takes precedence** for `preferred_username` — proxy headers can lag behind IdP username changes.
 
 | Claim/Header | Purpose |
 |---|---|
@@ -114,9 +116,60 @@ The bridge extracts user identity from the JWT ID token and forwarded headers:
 | `picture` | Profile image URL synced to Emby |
 | `email` | Optional — used in establishment logs only, not stored in database |
 
+**Resolution order for `preferred_username`:**
+
+1. `preferred_username` claim from the ID token (`Authorization` header)
+2. `X-Forwarded-Preferred-Username` / `X-Auth-Request-Preferred-Username` (fallback)
+
+The access token is never used for the Emby username. If the ID token and proxy header disagree, the bridge uses the ID token and logs a warning.
+
 `preferred_username` is required. The bridge does not fall back to `name` or `email` for the Emby username.
 
 If the preferred username is already taken by another Emby user during account creation, provisioning fails.
+
+**Required oauth2-proxy settings:**
+
+| Setting | Purpose |
+|---------|---------|
+| `set_authorization_header = true` | Forward ID token as `Authorization` (primary identity source) |
+| `pass_user_headers = true` | Forward `X-Forwarded-*` / `X-Auth-Request-*` headers (fallback) |
+| `pass_access_token = true` | Forward access token for userinfo profile image lookup |
+
+In forward auth mode, your reverse proxy must copy these headers from the oauth2-proxy auth response to the upstream request (see [Caddyfile example](examples/forward-auth-mode/Caddyfile)).
+
+### Username Changes at the IdP
+
+When a user renames their account at the identity provider, the bridge syncs the Emby username to the new `preferred_username` on **session establishment** only (not on every request). For the sync to see the new name:
+
+1. The user must obtain a **fresh ID token** from oauth2-proxy (stale oauth2-proxy sessions can keep old claims even after an IdP rename).
+2. Call **`/oauth2/sign_out`** on the oauth2-proxy host — logging out of the IdP alone may leave the oauth2-proxy cookie active.
+3. Log in again so the bridge re-establishes its in-memory Emby session.
+
+If you run multiple services behind the same oauth2-proxy, use a shared session cookie (see [Multi-Subdomain SSO](#multi-subdomain-sso)) so one sign-out clears all services.
+
+### Multi-Subdomain SSO
+
+If one oauth2-proxy instance protects multiple hosts (e.g. `emby.example.com`, `docs.example.com`), configure a **shared session cookie** so login and logout apply to all services:
+
+```ini
+# Shared SSO across subdomains (HTTPS required)
+cookie_name = "__Secure-oauth2_proxy"   # use __Secure-, not __Host- (host-only)
+cookie_secure = true
+cookie_samesite = "lax"
+cookie_domains = [".example.com"]       # leading dot — NOT "*.example.com"
+
+# Allow post-logout redirects (rd=) to your services and IdP end-session URL
+whitelist_domains = [".example.com", "auth.example.com"]
+```
+
+Important:
+
+- **`__Host-` cookies are per-host** — each subdomain gets its own session; logging out on one host does not log out others.
+- **`cookie_domains` does not support `*` wildcards** — use `.parent.domain` (e.g. `.proxy.example.com`). A value like `*.proxy.example.com` creates per-host cookies instead of a shared one.
+- **`whitelist_domains`** accepts `.` or `*.` prefixes for subdomains; this is separate from `cookie_domains` syntax.
+- After changing cookie name or domain, delete old oauth2-proxy cookies once, then log in again.
+
+See the commented optional block in [`examples/upstream-mode/oauth2-proxy.cfg`](examples/upstream-mode/oauth2-proxy.cfg) for a full reference.
 
 ### Profile Image Sync
 
@@ -186,8 +239,8 @@ The bridge hides the following buttons from the Emby web interface since they do
 
 | Button | Reason |
 |--------|--------|
-| **Sign Out** | Logging out of Emby makes no sense behind the bridge — the user would be re-authenticated immediately via oauth2-proxy. To sign out, users should log out of the OIDC provider directly. |
-| **Switch User** | User identity is determined by the OIDC session, not by Emby's local user selection. Switching users requires authenticating as a different identity at the OIDC provider. |
+| **Sign Out** | Logging out of Emby only ends the bridge's cached Emby session — oauth2-proxy would re-authenticate the user immediately. To sign out, use **`/oauth2/sign_out`** on the oauth2-proxy host (optionally with an `rd=` redirect to your IdP's end-session URL). See [Multi-Subdomain SSO](#multi-subdomain-sso) if you protect multiple subdomains. |
+| **Switch User** | User identity is determined by the OIDC session, not by Emby's local user selection. Switching users requires signing out via oauth2-proxy and authenticating as a different identity at the IdP. |
 
 These buttons are hidden via CSS injected into the Emby web page. They are not removed from the DOM, so admin users accessing Emby directly (not through the bridge) will still see them.
 
