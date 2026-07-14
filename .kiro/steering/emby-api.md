@@ -16,12 +16,14 @@ X-Emby-Authorization: Emby Client="EmbyAuthBridge", Device="Server", DeviceId="e
 
 ## Password Update (Two-Step)
 
-Emby requires a two-step process to change a user's password:
+Emby requires a two-step process to change a user's password when they already have one configured:
 
 1. **Reset** — POST `/Users/{Id}/Password?api_key={key}` with `{"Id": "...", "ResetPassword": true}`
 2. **Set** — POST `/Users/{Id}/Password?api_key={key}` with `{"Id": "...", "NewPw": "newpassword"}`
 
-Sending both `ResetPassword: true` and `NewPw` in one call does NOT work — Emby ignores `NewPw` when resetting.
+Users with `HasConfiguredPassword: false` skip step 1 and go straight to set.
+
+Sending both `ResetPassword: true` and `NewPw` in one call does NOT work — Emby ignores `NewPw` when resetting. Use `omitempty` JSON tags so empty fields are omitted from the request body.
 
 ## Endpoints Used
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,9 +15,10 @@ import (
 
 // User represents an Emby user record from the API.
 type User struct {
-	ID     string
-	Name   string
-	Policy *UserPolicy
+	ID                    string
+	Name                  string
+	HasConfiguredPassword bool
+	Policy                *UserPolicy
 }
 
 // UserPolicy represents Emby user policy fields.
@@ -172,55 +174,66 @@ func (c *Client) AuthenticateByName(ctx context.Context, username, password stri
 }
 
 // UpdatePassword sets a new password for the given user.
-// This is a two-step process: first reset the password to blank, then set the new one.
+// Users with an existing password are reset first; users without one skip straight to set.
 func (c *Client) UpdatePassword(ctx context.Context, userID, newPassword string) error {
+	user, err := c.GetUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("emby: get user for password update: %w", err)
+	}
+
 	url := fmt.Sprintf("%s/Users/%s/Password?api_key=%s", c.baseURL, userID, c.apiKey)
 
-	// Step 1: Reset password to blank.
-	resetBody := updatePasswordRequest{
-		ID:            userID,
-		ResetPassword: true,
+	if user.HasConfiguredPassword {
+		resetBody := updatePasswordRequest{
+			ID:            userID,
+			ResetPassword: true,
+		}
+
+		reqBody, err := json.Marshal(resetBody)
+		if err != nil {
+			return fmt.Errorf("emby: marshal reset password request: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+		if err != nil {
+			return fmt.Errorf("emby: create reset password request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("emby: reset password request: %w", err)
+		}
+		_ = resp.Body.Close()
+
+		if err := checkResponse(resp); err != nil {
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+				return fmt.Errorf("emby: reset password: %w", err)
+			}
+			// Some users report HasConfiguredPassword=true but reset still returns 400
+			// (e.g. blank password edge cases). Fall through to set-only.
+		}
 	}
 
-	reqBody, err := json.Marshal(resetBody)
-	if err != nil {
-		return fmt.Errorf("emby: marshal reset password request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
-	if err != nil {
-		return fmt.Errorf("emby: create reset password request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("emby: reset password request: %w", err)
-	}
-	_ = resp.Body.Close()
-
-	if err := checkResponse(resp); err != nil {
-		return fmt.Errorf("emby: reset password: %w", err)
-	}
-
-	// Step 2: Set the new password.
+	// Set the new password.
 	setBody := updatePasswordRequest{
-		ID:   userID,
+		ID:    userID,
 		NewPw: newPassword,
 	}
 
-	reqBody, err = json.Marshal(setBody)
+	reqBody, err := json.Marshal(setBody)
 	if err != nil {
 		return fmt.Errorf("emby: marshal set password request: %w", err)
 	}
 
-	req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return fmt.Errorf("emby: create set password request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err = c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("emby: set password request: %w", err)
 	}
@@ -231,6 +244,34 @@ func (c *Client) UpdatePassword(ctx context.Context, userID, newPassword string)
 	}
 
 	return nil
+}
+
+// GetUser fetches a user record from Emby by ID.
+func (c *Client) GetUser(ctx context.Context, userID string) (*User, error) {
+	url := fmt.Sprintf("%s/Users/%s?api_key=%s", c.baseURL, userID, c.apiKey)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("emby: create get user request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("emby: get user request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if err := checkResponse(resp); err != nil {
+		return nil, fmt.Errorf("emby: get user: %w", err)
+	}
+
+	var userResp userJSON
+	if err := json.NewDecoder(resp.Body).Decode(&userResp); err != nil {
+		return nil, fmt.Errorf("emby: decode user response: %w", err)
+	}
+
+	user := userResp.toUser()
+	return &user, nil
 }
 
 // GetUserPolicy fetches the full policy JSON for a user.
