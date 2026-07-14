@@ -297,30 +297,41 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				sub = r.Header.Get("X-Auth-Request-Sub")
 			}
 
-			// Try to extract claims from the JWT ID token.
+			// Extract claims from the ID token (Authorization header). Proxy headers can lag
+			// behind IdP username changes, so preferred_username from the ID token wins.
 			var jwtSub, jwtPreferredUsername, jwtEmail, jwtPicture string
 			idToken := ""
 			authHeader := r.Header.Get("Authorization")
 			if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
 				idToken = authHeader[7:]
-			}
-			if idToken == "" {
-				idToken = r.Header.Get("X-Forwarded-Access-Token")
-				if idToken == "" {
-					idToken = r.Header.Get("X-Auth-Request-Access-Token")
-				}
-			}
-			if idToken != "" {
 				jwtSub, jwtPreferredUsername, jwtEmail, jwtPicture = extractClaimsFromJWT(idToken)
 			}
-
-			// Preferred username: from headers or JWT.
-			preferredUsername := r.Header.Get("X-Forwarded-Preferred-Username")
-			if preferredUsername == "" {
-				preferredUsername = r.Header.Get("X-Auth-Request-Preferred-Username")
+			accessToken := r.Header.Get("X-Forwarded-Access-Token")
+			if accessToken == "" {
+				accessToken = r.Header.Get("X-Auth-Request-Access-Token")
 			}
+			if accessToken != "" && accessToken != idToken {
+				atSub, _, atEmail, atPicture := extractClaimsFromJWT(accessToken)
+				if jwtSub == "" {
+					jwtSub = atSub
+				}
+				if jwtEmail == "" {
+					jwtEmail = atEmail
+				}
+				if jwtPicture == "" {
+					jwtPicture = atPicture
+				}
+			}
+
+			headerPreferredUsername := r.Header.Get("X-Forwarded-Preferred-Username")
+			if headerPreferredUsername == "" {
+				headerPreferredUsername = r.Header.Get("X-Auth-Request-Preferred-Username")
+			}
+
+			// Preferred username: ID token claim, then proxy headers.
+			preferredUsername := jwtPreferredUsername
 			if preferredUsername == "" {
-				preferredUsername = jwtPreferredUsername
+				preferredUsername = headerPreferredUsername
 			}
 
 			// Fill in missing values from JWT claims.
@@ -337,6 +348,14 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			// preferredUsername shouldn't be the sub.
 			if preferredUsername == sub {
 				preferredUsername = ""
+			}
+
+			if jwtPreferredUsername != "" && headerPreferredUsername != "" && jwtPreferredUsername != headerPreferredUsername {
+				slog.Warn("OIDC preferred_username header differs from ID token, using ID token",
+					"sub", sub,
+					"header_preferred_username", headerPreferredUsername,
+					"id_token_preferred_username", jwtPreferredUsername,
+				)
 			}
 
 			headers := OIDCHeaders{

@@ -109,8 +109,15 @@ func ExtractSubFromRequest(r *http.Request) string {
 	return claims.Sub
 }
 
-// ExtractPreferredUsernameFromRequest extracts the OIDC preferred_username from headers or JWT.
+// ExtractPreferredUsernameFromRequest extracts the OIDC preferred_username from the ID token or headers.
 func ExtractPreferredUsernameFromRequest(r *http.Request) string {
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
+		if preferredUsername := preferredUsernameFromJWT(authHeader[7:]); preferredUsername != "" {
+			return preferredUsername
+		}
+	}
+
 	preferredUsername := r.Header.Get("X-Forwarded-Preferred-Username")
 	if preferredUsername == "" {
 		preferredUsername = r.Header.Get("X-Auth-Request-Preferred-Username")
@@ -119,21 +126,18 @@ func ExtractPreferredUsernameFromRequest(r *http.Request) string {
 		return preferredUsername
 	}
 
-	token := ""
-	authHeader := r.Header.Get("Authorization")
-	if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
-		token = authHeader[7:]
-	}
-	if token == "" {
-		token = r.Header.Get("X-Forwarded-Access-Token")
-		if token == "" {
-			token = r.Header.Get("X-Auth-Request-Access-Token")
-		}
-	}
+	return ""
+}
+
+func preferredUsernameFromJWT(token string) string {
 	if token == "" {
 		return ""
 	}
 
+	return extractPreferredUsernameClaim(token)
+}
+
+func extractPreferredUsernameClaim(token string) string {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return ""

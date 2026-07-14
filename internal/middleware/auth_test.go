@@ -1441,6 +1441,99 @@ func TestAuth_PreferredUsernameOverName(t *testing.T) {
 	}
 }
 
+// TestAuth_PreferredUsernameIDTokenOverStaleHeader verifies that the ID token claim
+// wins when oauth2-proxy forwards a stale preferred_username header.
+func TestAuth_PreferredUsernameIDTokenOverStaleHeader(t *testing.T) {
+	middleware.ClearSessionCache()
+
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	const (
+		oidcSub      = "c5fd6bb8-4eae-49b3-ab9e-4312ff5fd787"
+		staleHeader  = "becci"
+		idTokenName  = "FertoKitty"
+		embyUserID   = "b7e7c8318b73451d8dd503b9c6f720c9"
+		storedPass   = "storedpw"
+	)
+
+	err = database.InsertUser(oidcSub, embyUserID, storedPass)
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	var renameCalled bool
+	var newNameSent string
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("POST /Users/"+embyUserID, func(w http.ResponseWriter, r *http.Request) {
+			renameCalled = true
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			newNameSent = body["Name"]
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.HandleFunc("GET /Users/"+embyUserID, func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id": embyUserID, "Name": staleHeader,
+				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/"+embyUserID+"/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "rename-token",
+				"User":        map[string]interface{}{"Id": embyUserID, "Name": idTokenName},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(
+		`{"sub":"` + oidcSub + `","preferred_username":"` + idTokenName + `","email":"user@example.com"}`,
+	))
+	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesig"))
+	jwtToken := header + "." + payload + "." + signature
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Sub", oidcSub)
+	req.Header.Set("X-Forwarded-Preferred-Username", staleHeader)
+	req.Header.Set("Authorization", "Bearer "+jwtToken)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !renameCalled {
+		t.Fatal("UpdateUserName should have been called to sync ID token preferred_username")
+	}
+	if newNameSent != idTokenName {
+		t.Errorf("expected new name %q from ID token, got %q", idTokenName, newNameSent)
+	}
+}
+
 // TestAuth_UsernameCreationConflict verifies that user creation fails when the preferred username is taken.
 func TestAuth_UsernameCreationConflict(t *testing.T) {
 	database, err := db.Open(testDBURI())
