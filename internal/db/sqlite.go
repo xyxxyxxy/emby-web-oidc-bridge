@@ -9,25 +9,21 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
-const schemaV2 = `CREATE TABLE IF NOT EXISTS users (
+const schemaV3 = `CREATE TABLE IF NOT EXISTS users (
   oidc_sub TEXT PRIMARY KEY,
   emby_user_id TEXT NOT NULL,
   password TEXT NOT NULL,
-  picture_url TEXT NOT NULL DEFAULT '',
-  picture_synced_at TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );`
 
 // UserRecord represents a row in the users table.
 type UserRecord struct {
-	OIDCSub         string
-	EmbyUserID      string
-	Password        string
-	PictureURL      string
-	PictureSyncedAt time.Time
-	CreatedAt       time.Time
+	OIDCSub    string
+	EmbyUserID string
+	Password   string
+	CreatedAt  time.Time
 }
 
 // DB wraps SQLite database operations.
@@ -53,7 +49,7 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("open database: take connection: %w", err)
 	}
 
-	if err := sqlitex.ExecuteScript(conn, schemaV2, nil); err != nil {
+	if err := sqlitex.ExecuteScript(conn, schemaV3, nil); err != nil {
 		pool.Put(conn)
 		_ = pool.Close()
 		return nil, fmt.Errorf("open database: initialize schema: %w", err)
@@ -84,8 +80,14 @@ func migrateSchema(conn *sqlite.Conn) error {
 		return nil
 	}
 
-	if version < schemaVersion && usersTableHasColumn(conn, "name") {
+	if usersTableHasColumn(conn, "name") {
 		if err := migrateV1ToV2(conn); err != nil {
+			return err
+		}
+	}
+
+	if usersTableHasColumn(conn, "picture_url") {
+		if err := migrateV2ToV3(conn); err != nil {
 			return err
 		}
 	}
@@ -141,6 +143,39 @@ SELECT oidc_sub, emby_user_id, password, picture_url, picture_synced_at, created
 	return nil
 }
 
+func migrateV2ToV3(conn *sqlite.Conn) (err error) {
+	end := sqlitex.Transaction(conn)
+	defer end(&err)
+
+	err = sqlitex.ExecuteScript(conn, `CREATE TABLE users_v3 (
+  oidc_sub TEXT PRIMARY KEY,
+  emby_user_id TEXT NOT NULL,
+  password TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);`, nil)
+	if err != nil {
+		return fmt.Errorf("create users_v3: %w", err)
+	}
+
+	err = sqlitex.Execute(conn, `INSERT INTO users_v3 (oidc_sub, emby_user_id, password, created_at)
+SELECT oidc_sub, emby_user_id, password, created_at FROM users`, nil)
+	if err != nil {
+		return fmt.Errorf("copy users to users_v3: %w", err)
+	}
+
+	err = sqlitex.Execute(conn, "DROP TABLE users", nil)
+	if err != nil {
+		return fmt.Errorf("drop users table: %w", err)
+	}
+
+	err = sqlitex.Execute(conn, "ALTER TABLE users_v3 RENAME TO users", nil)
+	if err != nil {
+		return fmt.Errorf("rename users_v3: %w", err)
+	}
+
+	return nil
+}
+
 // FindUserBySub queries a user by OIDC subject identifier. Returns nil if not found.
 func (d *DB) FindUserBySub(sub string) (*UserRecord, error) {
 	conn, err := d.pool.Take(context.Background())
@@ -150,7 +185,7 @@ func (d *DB) FindUserBySub(sub string) (*UserRecord, error) {
 	defer d.pool.Put(conn)
 
 	var record *UserRecord
-	err = sqlitex.Execute(conn, "SELECT oidc_sub, emby_user_id, password, picture_url, picture_synced_at, created_at FROM users WHERE oidc_sub = :sub", &sqlitex.ExecOptions{
+	err = sqlitex.Execute(conn, "SELECT oidc_sub, emby_user_id, password, created_at FROM users WHERE oidc_sub = :sub", &sqlitex.ExecOptions{
 		Named: map[string]any{
 			":sub": sub,
 		},
@@ -208,27 +243,6 @@ func (d *DB) DeleteUser(sub string) error {
 	return nil
 }
 
-// UpdatePictureURL updates the stored picture URL for a user.
-func (d *DB) UpdatePictureURL(sub, pictureURL string) error {
-	conn, err := d.pool.Take(context.Background())
-	if err != nil {
-		return fmt.Errorf("update picture url: take connection: %w", err)
-	}
-	defer d.pool.Put(conn)
-
-	err = sqlitex.Execute(conn, "UPDATE users SET picture_url = :picture_url, picture_synced_at = datetime('now') WHERE oidc_sub = :sub", &sqlitex.ExecOptions{
-		Named: map[string]any{
-			":sub":         sub,
-			":picture_url": pictureURL,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("update picture url: %w", err)
-	}
-
-	return nil
-}
-
 // IsHealthy verifies database connectivity by executing a simple query.
 func (d *DB) IsHealthy() bool {
 	conn, err := d.pool.Take(context.Background())
@@ -252,22 +266,15 @@ func (d *DB) Close() error {
 
 // scanUserRecord extracts a UserRecord from a SQLite statement row.
 func scanUserRecord(stmt *sqlite.Stmt) *UserRecord {
-	pictureSyncedAtStr := stmt.GetText("picture_synced_at")
-	pictureSyncedAt, parseErr := time.Parse("2006-01-02 15:04:05", pictureSyncedAtStr)
-	if parseErr != nil {
-		pictureSyncedAt = time.Time{}
-	}
 	createdAtStr := stmt.GetText("created_at")
 	createdAt, parseErr := time.Parse("2006-01-02 15:04:05", createdAtStr)
 	if parseErr != nil {
 		createdAt = time.Time{}
 	}
 	return &UserRecord{
-		OIDCSub:         stmt.GetText("oidc_sub"),
-		EmbyUserID:      stmt.GetText("emby_user_id"),
-		Password:        stmt.GetText("password"),
-		PictureURL:      stmt.GetText("picture_url"),
-		PictureSyncedAt: pictureSyncedAt,
-		CreatedAt:       createdAt,
+		OIDCSub:    stmt.GetText("oidc_sub"),
+		EmbyUserID: stmt.GetText("emby_user_id"),
+		Password:   stmt.GetText("password"),
+		CreatedAt:  createdAt,
 	}
 }

@@ -1,9 +1,11 @@
 package middleware_test
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -771,9 +773,8 @@ func TestAuth_UsernameSync(t *testing.T) {
 	}
 }
 
-// TestAuth_AdminManualEmbyRename verifies that an admin rename in Emby does not
-// trigger re-provisioning. The linked account is found by ID, renamed back to
-// OIDC preferred_username, and the session cache is invalidated on drift.
+// TestAuth_AdminManualEmbyRename verifies cached sessions are not disturbed by
+// admin renames in Emby; rename sync runs only on session re-establishment.
 func TestAuth_AdminManualEmbyRename(t *testing.T) {
 	middleware.ClearSessionCache()
 
@@ -908,9 +909,7 @@ func TestAuth_AdminManualEmbyRename(t *testing.T) {
 	setEmbyName(adminRenamed)
 	renameCalled = false
 
-	// Second request: cache drift should force full auth, rename back, no re-provision.
-	next = &nextHandler{}
-	handler = middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+	// Second request: cached session — no Emby API calls, no rename.
 	rr = httptest.NewRecorder()
 	handler.ServeHTTP(rr, makeReq())
 
@@ -920,8 +919,29 @@ func TestAuth_AdminManualEmbyRename(t *testing.T) {
 	if !next.called {
 		t.Fatal("second request: next handler should have been called")
 	}
+	if renameCalled {
+		t.Error("cached request should not trigger Emby username reset")
+	}
+	if atomic.LoadInt32(&authCount) != 1 {
+		t.Errorf("cached request should not re-authenticate, got %d auth calls", authCount)
+	}
+
+	// Third request: re-establish session — rename back, no re-provision.
+	middleware.ClearSessionCache()
+	renameCalled = false
+	next = &nextHandler{}
+	handler = middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, makeReq())
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("third request: expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !next.called {
+		t.Fatal("third request: next handler should have been called")
+	}
 	if !renameCalled {
-		t.Error("expected Emby username reset after admin rename")
+		t.Error("expected Emby username reset after session re-establishment")
 	}
 	if renameTarget != preferredName {
 		t.Errorf("expected rename target %q, got %q", preferredName, renameTarget)
@@ -933,7 +953,7 @@ func TestAuth_AdminManualEmbyRename(t *testing.T) {
 		t.Errorf("expected no password updates during rename recovery, got %d", passwordUpdateCount)
 	}
 	if atomic.LoadInt32(&authCount) != 2 {
-		t.Errorf("expected 2 auth calls (cache invalidated), got %d", authCount)
+		t.Errorf("expected 2 auth calls after re-establishment, got %d", authCount)
 	}
 
 	record, err := database.FindUserBySub(oidcSub)
@@ -1062,6 +1082,161 @@ func TestAuth_ConcurrentUsernameRename(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&renameCount); got != 1 {
 		t.Fatalf("expected exactly 1 rename call, got %d", got)
+	}
+}
+
+// TestAuth_CachedRequestUsesSessionWithoutReauth verifies the fast path reuses
+// the cached token without calling Emby AuthenticateByName again.
+func TestAuth_CachedRequestUsesSessionWithoutReauth(t *testing.T) {
+	middleware.ClearSessionCache()
+
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	err = database.InsertUser("sub-cached", "user-cached-1", "storedpw")
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	var authCount int32
+	var getUserCount int32
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&authCount, 1)
+			resp := map[string]interface{}{
+				"AccessToken": "cached-token",
+				"User":        map[string]interface{}{"Id": "user-cached-1", "Name": "alice"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("GET /Users/user-cached-1", func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&getUserCount, 1)
+			resp := map[string]interface{}{
+				"Id":   "user-cached-1",
+				"Name": "alice",
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/user-cached-1/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(&nextHandler{})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Sub", "sub-cached")
+	req.Header.Set("X-Forwarded-Preferred-Username", "alice")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("first request: expected 200, got %d", rr.Code)
+	}
+
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("second request: expected 200, got %d", rr.Code)
+	}
+	if got := atomic.LoadInt32(&authCount); got != 1 {
+		t.Errorf("expected 1 AuthenticateByName call, got %d", got)
+	}
+	if got := atomic.LoadInt32(&getUserCount); got != 1 {
+		t.Errorf("expected 1 GetUser call during establishment only, got %d", got)
+	}
+}
+
+// TestAuth_SessionEstablishmentLogged verifies establishment emits structured log.
+func TestAuth_SessionEstablishmentLogged(t *testing.T) {
+	middleware.ClearSessionCache()
+
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{"Id": "new-user-1", "Name": "newbie"}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/new-user-1", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":                    "new-user-1",
+				"Name":                  "newbie",
+				"HasConfiguredPassword": false,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("/Users/new-user-1/Password", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/new-user-1/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"AccessToken": "new-token",
+				"User":        map[string]interface{}{"Id": "new-user-1", "Name": "newbie"},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(&nextHandler{})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Sub", "sub-new-log")
+	req.Header.Set("X-Forwarded-Preferred-Username", "newbie")
+	req.Header.Set("X-Forwarded-Picture", "https://example.com/avatar.png")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	if !strings.Contains(logBuf.String(), "emby session established") {
+		t.Fatalf("expected establishment log, got: %s", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), `"reason":"first_login"`) {
+		t.Errorf("expected reason=first_login in log, got: %s", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), `"picture_sync":true`) {
+		t.Errorf("expected picture_sync=true in log, got: %s", logBuf.String())
 	}
 }
 

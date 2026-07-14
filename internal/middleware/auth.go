@@ -36,11 +36,7 @@ type cachedSession struct {
 	userID      string
 	serverID    string
 	embyUserID  string
-	expiresAt   time.Time
 }
-
-// sessionCacheTTL is how long a cached session is valid before re-authentication.
-const sessionCacheTTL = 1 * time.Hour
 
 // clearSessionCache removes all entries from the session cache.
 // This is intended for use in tests to ensure isolation between test cases.
@@ -204,6 +200,64 @@ func syncEmbyUsernameToPreferred(ctx context.Context, embyClient *emby.Client, s
 	return newName, nil
 }
 
+func fetchPictureFromUserinfo(ctx context.Context, r *http.Request, oidcIssuerURL string) string {
+	if oidcIssuerURL == "" {
+		return ""
+	}
+	accessToken := r.Header.Get("X-Forwarded-Access-Token")
+	if accessToken == "" {
+		accessToken = r.Header.Get("X-Auth-Request-Access-Token")
+	}
+	if accessToken == "" {
+		return ""
+	}
+	userinfoURL := strings.TrimRight(oidcIssuerURL, "/") + "/userinfo"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, userinfoURL, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	resp, err := oidcClient.Do(req)
+	if err != nil {
+		slog.Warn("failed to fetch userinfo", "error", err)
+		return ""
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var claims struct {
+		Picture string `json:"picture"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&claims) != nil || claims.Picture == "" {
+		return ""
+	}
+	slog.Info("fetched picture URL from userinfo", "picture_url", claims.Picture)
+	return claims.Picture
+}
+
+func startProfileImageSync(embyClient *emby.Client, sub, embyUserID, pictureURL string) bool {
+	if pictureURL == "" {
+		return false
+	}
+	if _, loaded := pictureSyncInFlight.LoadOrStore(sub, true); loaded {
+		return false
+	}
+	go func() {
+		defer pictureSyncInFlight.Delete(sub)
+		bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer bgCancel()
+		if err := embyClient.SetProfileImage(bgCtx, embyUserID, pictureURL); err != nil {
+			slog.Warn("failed to set profile image",
+				"sub", sub,
+				"emby_user_id", embyUserID,
+				"error", err,
+			)
+		}
+	}()
+	return true
+}
+
 func respondUsernameSyncError(w http.ResponseWriter, sub string, err error) {
 	var conflict *UsernameConflictError
 	if errors.As(err, &conflict) {
@@ -311,70 +365,20 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				return
 			}
 
-			// If no picture URL from headers/JWT, try fetching from OIDC userinfo endpoint.
-			if headers.PictureURL == "" && oidcIssuerURL != "" {
-				accessToken := r.Header.Get("X-Forwarded-Access-Token")
-				if accessToken == "" {
-					accessToken = r.Header.Get("X-Auth-Request-Access-Token")
-				}
-				if accessToken != "" {
-					userinfoURL := strings.TrimRight(oidcIssuerURL, "/") + "/userinfo"
-					req, err := http.NewRequestWithContext(ctx, http.MethodGet, userinfoURL, nil)
-					if err == nil {
-						req.Header.Set("Authorization", "Bearer "+accessToken)
-						resp, err := oidcClient.Do(req)
-						if err == nil {
-							defer func() { _ = resp.Body.Close() }()
-							if resp.StatusCode == http.StatusOK {
-								var claims struct {
-									Picture string `json:"picture"`
-								}
-								if json.NewDecoder(resp.Body).Decode(&claims) == nil && claims.Picture != "" {
-									headers.PictureURL = claims.Picture
-									slog.Info("fetched picture URL from userinfo", "picture_url", headers.PictureURL)
-								}
-							}
-						} else {
-							slog.Warn("failed to fetch userinfo", "error", err)
-						}
-					}
-				}
-			}
-
-			// Check session cache — if we have a valid cached session, skip everything
-			// unless Emby-side username drift is detected (e.g. admin manual rename).
+			// Established session — attach cached token and forward without Emby API calls.
 			if cached, ok := sessionCache.Load(headers.Sub); ok {
 				session := cached.(*cachedSession)
-				if time.Now().Before(session.expiresAt) {
-					useCache := true
-					desiredUsername := headers.embyUsername()
-					if session.embyUserID != "" && desiredUsername != "" {
-						if embyUser, getErr := embyClient.GetUser(ctx, session.embyUserID); getErr == nil {
-							if embyUser.Name != desiredUsername {
-								InvalidateSession(headers.Sub)
-								useCache = false
-							}
-						}
-					}
-					if useCache {
-						ctx = handler.WithAuthUsername(ctx, headers.embyUsername())
-						ctx = handler.WithAuthSub(ctx, headers.Sub)
-						ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
-						next.ServeHTTP(w, r.WithContext(ctx))
-						return
-					}
-				} else {
-					// Session expired — delete and continue with fresh auth.
-					sessionCache.Delete(headers.Sub)
-				}
+				ctx = handler.WithAuthUsername(ctx, headers.embyUsername())
+				ctx = handler.WithAuthSub(ctx, headers.Sub)
+				ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
 			}
 
-			slog.Info("processing authentication",
-				"sub", headers.Sub,
-				"preferred_username", headers.PreferredUsername,
-				"email", headers.Email,
-				"picture_url", headers.PictureURL,
-			)
+			// Session establishment — fetch picture from userinfo if not in headers/JWT.
+			if headers.PictureURL == "" {
+				headers.PictureURL = fetchPictureFromUserinfo(ctx, r, oidcIssuerURL)
+			}
 
 			// Lookup user in database by OIDC sub.
 			record, err := database.FindUserBySub(headers.Sub)
@@ -386,6 +390,8 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 				return
 			}
+
+			hadExistingRecord := record != nil
 
 			var userPassword string
 			var embyUserID string
@@ -685,53 +691,26 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			}
 
 		authenticated:
-			slog.Info("authenticated with Emby",
-				"sub", headers.Sub,
-				"emby_user_id", authResult.User.ID,
-			)
-
-			// Store session in cache for subsequent requests.
 			sessionCache.Store(headers.Sub, &cachedSession{
 				accessToken: authResult.AccessToken,
 				userID:      authResult.User.ID,
 				serverID:    authResult.ServerID,
 				embyUserID:  embyUserID,
-				expiresAt:   time.Now().Add(sessionCacheTTL),
 			})
 
-			// Non-blocking: sync profile image when URL has changed (or on first provisioning).
-			// Uses pictureSyncInFlight to prevent concurrent syncs for the same user.
-			if headers.PictureURL != "" {
-				shouldSync := record == nil || record.PictureURL != headers.PictureURL ||
-					(!record.PictureSyncedAt.IsZero() && time.Since(record.PictureSyncedAt) > 24*time.Hour) ||
-					(record.PictureSyncedAt.IsZero() && record.PictureURL != "")
-				if shouldSync {
-					// Only start a sync if one isn't already in flight for this user.
-					if _, loaded := pictureSyncInFlight.LoadOrStore(headers.Sub, true); !loaded {
-						pictureURL := headers.PictureURL
-						userSub := headers.Sub
-						go func() {
-							defer pictureSyncInFlight.Delete(userSub)
-							bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Second)
-							defer bgCancel()
-							if err := embyClient.SetProfileImage(bgCtx, embyUserID, pictureURL); err != nil {
-								slog.Warn("failed to set profile image",
-									"sub", userSub,
-									"emby_user_id", embyUserID,
-									"error", err,
-								)
-								return
-							}
-							if err := database.UpdatePictureURL(userSub, pictureURL); err != nil {
-								slog.Warn("failed to update stored picture URL",
-									"sub", userSub,
-									"error", err,
-								)
-							}
-						}()
-					}
-				}
+			pictureSync := startProfileImageSync(embyClient, headers.Sub, embyUserID, headers.PictureURL)
+
+			reason := "first_login"
+			if hadExistingRecord {
+				reason = "returning_user"
 			}
+			slog.Info("emby session established",
+				"sub", headers.Sub,
+				"preferred_username", headers.PreferredUsername,
+				"emby_user_id", embyUserID,
+				"reason", reason,
+				"picture_sync", pictureSync,
+			)
 
 			// Non-blocking: enforce IsDisabled=false and EnableUserPreferenceAccess=false
 			// on the user's current policy. Only updates if the values differ to avoid
