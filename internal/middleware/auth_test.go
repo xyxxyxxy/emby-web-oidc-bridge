@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -186,8 +188,8 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 	}
 }
 
-// TestAuth_ExistingUserPreferredUsernameMismatch verifies that existing users
-// authenticate with their linked Emby account name even when preferred_username differs.
+// TestAuth_ExistingUserPreferredUsernameMismatch verifies that auth fails with 409
+// when OIDC preferred_username is already used by another Emby account.
 func TestAuth_ExistingUserPreferredUsernameMismatch(t *testing.T) {
 	database, err := db.Open(testDBURI())
 	if err != nil {
@@ -201,6 +203,15 @@ func TestAuth_ExistingUserPreferredUsernameMismatch(t *testing.T) {
 	}
 
 	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Items": []map[string]interface{}{
+					{"Id": "other-admin-id", "Name": "admin"},
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
 		mux.HandleFunc("/Users/admin-user-id", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{
 				"Id":   "admin-user-id",
@@ -208,31 +219,6 @@ func TestAuth_ExistingUserPreferredUsernameMismatch(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(resp)
-		})
-		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
-			var body struct {
-				Username string `json:"Username"`
-				Pw       string `json:"Pw"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-
-			if body.Username != "admin@example.com" {
-				t.Errorf("expected Emby account name admin@example.com, got %s", body.Username)
-			}
-			if body.Pw != "storedpw" {
-				t.Errorf("expected password storedpw, got %s", body.Pw)
-			}
-
-			resp := map[string]interface{}{
-				"AccessToken": "admin-token",
-				"User":        map[string]interface{}{"Id": "admin-user-id", "Name": "admin@example.com"},
-				"ServerId":    "server-1",
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(resp)
-		})
-		mux.HandleFunc("/Users/admin-user-id/Policy", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusNoContent)
 		})
 	})
 	defer srv.Close()
@@ -250,14 +236,20 @@ func TestAuth_ExistingUserPreferredUsernameMismatch(t *testing.T) {
 
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	if rr.Code != http.StatusConflict {
+		t.Errorf("expected status %d, got %d: %s", http.StatusConflict, rr.Code, rr.Body.String())
 	}
-	if !next.called {
-		t.Error("next handler should have been called")
+	if !strings.Contains(rr.Body.String(), "preferred_username is already used by Emby user other-admin-id") {
+		t.Errorf("expected conflict message with blocking user id, got %q", rr.Body.String())
 	}
-	if next.authToken != "admin-token" {
-		t.Errorf("expected auth token %q, got %q", "admin-token", next.authToken)
+	if !strings.Contains(rr.Body.String(), "linked account admin-user-id") {
+		t.Errorf("expected conflict message with linked account id, got %q", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "admin@example.com") || strings.Contains(rr.Body.String(), "\"admin\"") {
+		t.Errorf("conflict response must not contain personal data, got %q", rr.Body.String())
+	}
+	if next.called {
+		t.Error("next handler should not have been called")
 	}
 }
 
@@ -724,6 +716,11 @@ func TestAuth_UsernameSync(t *testing.T) {
 	var newNameSent string
 
 	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
 		// POST /Users/{id} — rename user.
 		mux.HandleFunc("POST /Users/emby-rename-1", func(w http.ResponseWriter, r *http.Request) {
 			renameCalled = true
@@ -735,7 +732,7 @@ func TestAuth_UsernameSync(t *testing.T) {
 		// GET /Users/{id} — get user policy.
 		mux.HandleFunc("GET /Users/emby-rename-1", func(w http.ResponseWriter, r *http.Request) {
 			resp := map[string]interface{}{
-				"Id": "emby-rename-1", "Name": "New Name",
+				"Id": "emby-rename-1", "Name": "Old Name",
 				"Policy": map[string]interface{}{"IsDisabled": false, "IsHidden": true, "EnableUserPreferenceAccess": false},
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -786,6 +783,186 @@ func TestAuth_UsernameSync(t *testing.T) {
 	}
 	if record.Name != "New Name" {
 		t.Errorf("expected DB name %q, got %q", "New Name", record.Name)
+	}
+}
+
+// TestAuth_AdminManualEmbyRename verifies that an admin rename in Emby does not
+// trigger re-provisioning. The linked account is found by ID, renamed back to
+// OIDC preferred_username, and the session cache is invalidated on drift.
+func TestAuth_AdminManualEmbyRename(t *testing.T) {
+	middleware.ClearSessionCache()
+
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	const (
+		oidcSub       = "sub-admin-rename"
+		preferredName = "alice"
+		adminRenamed  = "bob"
+		embyUserID    = "emby-alice-1"
+		storedPass    = "storedpw"
+	)
+
+	err = database.InsertUser(oidcSub, preferredName, "alice@example.com", embyUserID, storedPass)
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	var (
+		embyNameMu          sync.Mutex
+		embyName            = preferredName
+		renameCalled        bool
+		renameTarget        string
+		createCalled        bool
+		passwordUpdateCount int32
+		authCount           int32
+	)
+
+	setEmbyName := func(name string) {
+		embyNameMu.Lock()
+		embyName = name
+		embyNameMu.Unlock()
+	}
+	getEmbyName := func() string {
+		embyNameMu.Lock()
+		defer embyNameMu.Unlock()
+		return embyName
+	}
+
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/Query", func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{"Items": []map[string]interface{}{}}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("GET /Users/"+embyUserID, func(w http.ResponseWriter, r *http.Request) {
+			resp := map[string]interface{}{
+				"Id":   embyUserID,
+				"Name": getEmbyName(),
+				"Policy": map[string]interface{}{
+					"IsDisabled":                 false,
+					"IsHidden":                   true,
+					"EnableUserPreferenceAccess": false,
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+		mux.HandleFunc("POST /Users/"+embyUserID, func(w http.ResponseWriter, r *http.Request) {
+			renameCalled = true
+			var body map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			renameTarget = body["Name"]
+			setEmbyName(body["Name"])
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.HandleFunc("/Users/"+embyUserID+"/Password", func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&passwordUpdateCount, 1)
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
+			createCalled = true
+			w.WriteHeader(http.StatusInternalServerError)
+		})
+		mux.HandleFunc("/Users/"+embyUserID+"/Policy", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&authCount, 1)
+			var body struct {
+				Username string `json:"Username"`
+				Pw       string `json:"Pw"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+
+			if body.Username != preferredName {
+				t.Errorf("expected auth username %q, got %q", preferredName, body.Username)
+			}
+			if body.Pw != storedPass {
+				t.Errorf("expected stored password, got %q", body.Pw)
+			}
+
+			resp := map[string]interface{}{
+				"AccessToken": "rename-token",
+				"User":        map[string]interface{}{"Id": embyUserID, "Name": preferredName},
+				"ServerId":    "server-1",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	makeReq := func() *http.Request {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("X-Forwarded-Sub", oidcSub)
+		req.Header.Set("X-Forwarded-Preferred-Username", preferredName)
+		req.Header.Set("X-Forwarded-User", preferredName)
+		req.Header.Set("X-Forwarded-Email", "alice@example.com")
+		return req
+	}
+
+	// First request: populate session cache with matching username.
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, makeReq())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("first request: expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if atomic.LoadInt32(&authCount) != 1 {
+		t.Fatalf("first request: expected 1 auth call, got %d", authCount)
+	}
+
+	// Simulate admin manual rename in Emby.
+	setEmbyName(adminRenamed)
+	renameCalled = false
+
+	// Second request: cache drift should force full auth, rename back, no re-provision.
+	next = &nextHandler{}
+	handler = middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, makeReq())
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("second request: expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !next.called {
+		t.Fatal("second request: next handler should have been called")
+	}
+	if !renameCalled {
+		t.Error("expected Emby username reset after admin rename")
+	}
+	if renameTarget != preferredName {
+		t.Errorf("expected rename target %q, got %q", preferredName, renameTarget)
+	}
+	if createCalled {
+		t.Error("CreateUser should not be called for admin rename")
+	}
+	if atomic.LoadInt32(&passwordUpdateCount) != 0 {
+		t.Errorf("expected no password updates during rename recovery, got %d", passwordUpdateCount)
+	}
+	if atomic.LoadInt32(&authCount) != 2 {
+		t.Errorf("expected 2 auth calls (cache invalidated), got %d", authCount)
+	}
+
+	record, err := database.FindUserBySub(oidcSub)
+	if err != nil {
+		t.Fatalf("failed to find user in db: %v", err)
+	}
+	if record == nil {
+		t.Fatal("expected user record to remain in db")
+	}
+	if record.EmbyUserID != embyUserID {
+		t.Errorf("expected emby_user_id %q unchanged, got %q", embyUserID, record.EmbyUserID)
+	}
+	if record.Password != storedPass {
+		t.Errorf("expected password unchanged, got %q", record.Password)
 	}
 }
 

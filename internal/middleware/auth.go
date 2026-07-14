@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -129,6 +131,76 @@ func (h *OIDCHeaders) displayName() string {
 		return h.PreferredUsername
 	}
 	return h.Name
+}
+
+// UsernameConflictError is returned when OIDC preferred_username is already used
+// by a different Emby account and the linked user cannot be renamed.
+type UsernameConflictError struct {
+	EmbyUserID        string
+	TakenByEmbyUserID string
+}
+
+func (e *UsernameConflictError) Error() string {
+	return fmt.Sprintf(
+		"Conflict: OIDC preferred_username is already used by Emby user %s (linked account %s)",
+		e.TakenByEmbyUserID, e.EmbyUserID,
+	)
+}
+
+// syncEmbyUsernameToPreferred resets the linked Emby account name to the OIDC
+// preferred_username when it differs. Returns the name to use for authentication.
+// Invalidates the session cache when a rename is applied so stale tokens are not reused.
+func syncEmbyUsernameToPreferred(ctx context.Context, embyClient *emby.Client, sub, embyUserID, currentName, desiredName string) (string, error) {
+	if desiredName == "" || desiredName == currentName {
+		return currentName, nil
+	}
+
+	newName := desiredName
+	existingUser, lookupErr := embyClient.FindUserByName(ctx, newName)
+	if lookupErr != nil {
+		return currentName, fmt.Errorf("emby username lookup: %w", lookupErr)
+	}
+	if existingUser != nil && existingUser.ID != embyUserID {
+		conflict := &UsernameConflictError{
+			EmbyUserID:        embyUserID,
+			TakenByEmbyUserID: existingUser.ID,
+		}
+		slog.Warn("cannot reset Emby username: preferred_username already taken",
+			"sub", sub,
+			"emby_user_id", embyUserID,
+			"taken_by_emby_user_id", existingUser.ID,
+		)
+		return currentName, conflict
+	}
+
+	slog.Warn("Emby username differs from OIDC preferred_username, resetting in Emby",
+		"sub", sub,
+		"emby_user_id", embyUserID,
+	)
+	InvalidateSession(sub)
+
+	if err := embyClient.UpdateUserName(ctx, embyUserID, newName); err != nil {
+		slog.Error("failed to rename user in Emby",
+			"sub", sub,
+			"emby_user_id", embyUserID,
+			"error", err,
+		)
+		return currentName, fmt.Errorf("rename Emby user: %w", err)
+	}
+	return newName, nil
+}
+
+func respondUsernameSyncError(w http.ResponseWriter, sub string, err error) {
+	var conflict *UsernameConflictError
+	if errors.As(err, &conflict) {
+		http.Error(w, conflict.Error(), http.StatusConflict)
+		return
+	}
+	slog.Error("failed to sync Emby username",
+		"sub", sub,
+		"error", err,
+	)
+	http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 }
 
 // Auth returns middleware that extracts headers, provisions users, and authenticates with Emby.
@@ -272,18 +344,32 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 			}
 
-			// Check session cache — if we have a valid cached session, skip everything.
+			// Check session cache — if we have a valid cached session, skip everything
+			// unless Emby-side username drift is detected (e.g. admin manual rename).
 			if cached, ok := sessionCache.Load(headers.Sub); ok {
 				session := cached.(*cachedSession)
 				if time.Now().Before(session.expiresAt) {
-					ctx = handler.WithAuthUsername(ctx, headers.embyUsername())
-					ctx = handler.WithAuthSub(ctx, headers.Sub)
-					ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
+					useCache := true
+					desiredUsername := headers.embyUsername()
+					if session.embyUserID != "" && desiredUsername != "" {
+						if embyUser, getErr := embyClient.GetUser(ctx, session.embyUserID); getErr == nil {
+							if embyUser.Name != desiredUsername {
+								InvalidateSession(headers.Sub)
+								useCache = false
+							}
+						}
+					}
+					if useCache {
+						ctx = handler.WithAuthUsername(ctx, headers.embyUsername())
+						ctx = handler.WithAuthSub(ctx, headers.Sub)
+						ctx = handler.WithAuthSession(ctx, session.accessToken, session.userID, session.serverID)
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
+				} else {
+					// Session expired — delete and continue with fresh auth.
+					sessionCache.Delete(headers.Sub)
 				}
-				// Session expired — delete and continue with fresh auth.
-				sessionCache.Delete(headers.Sub)
 			}
 
 			slog.Info("processing authentication",
@@ -338,32 +424,11 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 
 				// Sync Emby username to preferred_username when possible.
-				if desiredUsername != "" && desiredUsername != embyUsername {
-					newName := desiredUsername
-					existingUser, lookupErr := embyClient.FindUserByName(ctx, newName)
-					if lookupErr == nil && existingUser != nil && existingUser.ID != embyUserID {
-						// Name is taken — keep the current Emby username.
-						newName = embyUsername
-					}
-
-					if newName != embyUsername {
-						slog.Info("syncing username change to Emby",
-							"sub", headers.Sub,
-							"old_name", embyUsername,
-							"new_name", newName,
-						)
-						if err := embyClient.UpdateUserName(ctx, embyUserID, newName); err != nil {
-							slog.Error("failed to rename user in Emby",
-								"sub", headers.Sub,
-								"emby_user_id", embyUserID,
-								"new_name", newName,
-								"error", err,
-							)
-							// Non-fatal: continue with auth using current name.
-						} else {
-							embyUsername = newName
-						}
-					}
+				var syncErr error
+				embyUsername, syncErr = syncEmbyUsernameToPreferred(ctx, embyClient, headers.Sub, embyUserID, embyUsername, desiredUsername)
+				if syncErr != nil {
+					respondUsernameSyncError(w, headers.Sub, syncErr)
+					return
 				}
 			} else {
 				// User not in DB — provision with the OIDC preferred_username.
@@ -473,9 +538,23 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			// Authenticate with Emby using the current Emby username.
 			authResult, err := embyClient.AuthenticateByName(ctx, embyUsername, userPassword)
 			if err != nil {
-				// If user was in DB but auth failed, they may have been deleted from Emby.
-				// Check if user still exists and re-provision if needed.
+				// If user was in DB but auth failed, the linked account may have been renamed
+				// in Emby. Try to find it by ID, reset the username, and retry before re-provisioning.
 				if record != nil {
+					if linkedUser, getErr := embyClient.GetUser(ctx, embyUserID); getErr == nil {
+						syncedName, syncErr := syncEmbyUsernameToPreferred(ctx, embyClient, headers.Sub, embyUserID, linkedUser.Name, headers.embyUsername())
+						if syncErr != nil {
+							respondUsernameSyncError(w, headers.Sub, syncErr)
+							return
+						}
+						if syncedName != linkedUser.Name || syncedName != embyUsername {
+							authResult, err = embyClient.AuthenticateByName(ctx, syncedName, userPassword)
+							if err == nil {
+								goto authenticated
+							}
+						}
+					}
+
 					staleEmbyUserID := embyUserID
 
 					slog.Warn("authentication failed for existing DB user, checking if user was deleted from Emby",
@@ -620,6 +699,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 			}
 
+		authenticated:
 			slog.Info("authenticated with Emby",
 				"sub", headers.Sub,
 				"emby_user_id", authResult.User.ID,
