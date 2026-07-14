@@ -209,50 +209,58 @@ func TestAuthenticateByName_HeaderFormat(t *testing.T) {
 }
 
 func TestUpdatePassword_Success(t *testing.T) {
-	var callCount int
+	var passwordCallCount int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
-		}
-		if r.URL.Path != "/Users/user-123/Password" {
-			t.Errorf("unexpected path: %s", r.URL.Path)
-		}
-		if r.URL.Query().Get("api_key") != "test-key" {
-			t.Errorf("unexpected api_key: %s", r.URL.Query().Get("api_key"))
-		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/Users/user-123":
+			resp := map[string]interface{}{
+				"Id":                      "user-123",
+				"Name":                    "user",
+				"HasConfiguredPassword":   true,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
 
-		callCount++
+		case r.Method == http.MethodPost && r.URL.Path == "/Users/user-123/Password":
+			if r.URL.Query().Get("api_key") != "test-key" {
+				t.Errorf("unexpected api_key: %s", r.URL.Query().Get("api_key"))
+			}
 
-		var body updatePasswordRequest
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("failed to decode request body: %v", err)
-		}
-		if body.ID != "user-123" {
-			t.Errorf("call %d: body.ID = %q, want %q", callCount, body.ID, "user-123")
-		}
+			passwordCallCount++
 
-		switch callCount {
-		case 1:
-			// Step 1: Reset password.
-			if !body.ResetPassword {
-				t.Error("call 1: body.ResetPassword = false, want true")
+			var body updatePasswordRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode request body: %v", err)
 			}
-			if body.NewPw != "" {
-				t.Errorf("call 1: body.NewPw = %q, want empty", body.NewPw)
+			if body.ID != "user-123" {
+				t.Errorf("call %d: body.ID = %q, want %q", passwordCallCount, body.ID, "user-123")
 			}
-		case 2:
-			// Step 2: Set new password.
-			if body.ResetPassword {
-				t.Error("call 2: body.ResetPassword = true, want false")
+
+			switch passwordCallCount {
+			case 1:
+				if !body.ResetPassword {
+					t.Error("call 1: body.ResetPassword = false, want true")
+				}
+				if body.NewPw != "" {
+					t.Errorf("call 1: body.NewPw = %q, want empty", body.NewPw)
+				}
+			case 2:
+				if body.ResetPassword {
+					t.Error("call 2: body.ResetPassword = true, want omitted/false")
+				}
+				if body.NewPw != "newpass1" {
+					t.Errorf("call 2: body.NewPw = %q, want %q", body.NewPw, "newpass1")
+				}
+			default:
+				t.Errorf("unexpected call %d to Password endpoint", passwordCallCount)
 			}
-			if body.NewPw != "newpass1" {
-				t.Errorf("call 2: body.NewPw = %q, want %q", body.NewPw, "newpass1")
-			}
+
+			w.WriteHeader(http.StatusNoContent)
+
 		default:
-			t.Errorf("unexpected call %d to Password endpoint", callCount)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
 		}
-
-		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
 
@@ -261,8 +269,54 @@ func TestUpdatePassword_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if callCount != 2 {
-		t.Errorf("expected 2 calls to Password endpoint, got %d", callCount)
+	if passwordCallCount != 2 {
+		t.Errorf("expected 2 calls to Password endpoint, got %d", passwordCallCount)
+	}
+}
+
+func TestUpdatePassword_SkipResetWhenNoPassword(t *testing.T) {
+	var passwordCallCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/Users/user-123":
+			resp := map[string]interface{}{
+				"Id":                    "user-123",
+				"Name":                  "user",
+				"HasConfiguredPassword": false,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+
+		case r.Method == http.MethodPost && r.URL.Path == "/Users/user-123/Password":
+			passwordCallCount++
+
+			var body updatePasswordRequest
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode request body: %v", err)
+			}
+			if body.ResetPassword {
+				t.Error("reset should be skipped when user has no configured password")
+			}
+			if body.NewPw != "newpass1" {
+				t.Errorf("body.NewPw = %q, want %q", body.NewPw, "newpass1")
+			}
+
+			w.WriteHeader(http.StatusNoContent)
+
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key")
+	err := client.UpdatePassword(context.Background(), "user-123", "newpass1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if passwordCallCount != 1 {
+		t.Errorf("expected 1 call to Password endpoint, got %d", passwordCallCount)
 	}
 }
 
@@ -518,7 +572,17 @@ func TestErrorHandling_5xx_AuthenticateByName(t *testing.T) {
 
 func TestErrorHandling_4xx_UpdatePassword(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/Users/user-123":
+			resp := map[string]interface{}{
+				"Id":                    "user-123",
+				"HasConfiguredPassword": false,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		default:
+			w.WriteHeader(http.StatusForbidden)
+		}
 	}))
 	defer srv.Close()
 
