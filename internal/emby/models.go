@@ -25,9 +25,10 @@ type authenticateResponse struct {
 }
 
 type userJSON struct {
-	ID     string          `json:"Id"`
-	Name   string          `json:"Name"`
-	Policy *userPolicyJSON `json:"Policy,omitempty"`
+	ID                      string          `json:"Id"`
+	Name                    string          `json:"Name"`
+	HasConfiguredPassword   bool            `json:"HasConfiguredPassword"`
+	Policy                  *userPolicyJSON `json:"Policy,omitempty"`
 }
 
 type userPolicyJSON struct {
@@ -38,15 +39,16 @@ type userPolicyJSON struct {
 
 type updatePasswordRequest struct {
 	ID            string `json:"Id"`
-	NewPw         string `json:"NewPw"`
-	ResetPassword bool   `json:"ResetPassword"`
+	NewPw         string `json:"NewPw,omitempty"`
+	ResetPassword bool   `json:"ResetPassword,omitempty"`
 }
 
 // toUser converts a userJSON to the public User type.
 func (u userJSON) toUser() User {
 	user := User{
-		ID:   u.ID,
-		Name: u.Name,
+		ID:                    u.ID,
+		Name:                  u.Name,
+		HasConfiguredPassword: u.HasConfiguredPassword,
 	}
 	if u.Policy != nil {
 		user.Policy = &UserPolicy{

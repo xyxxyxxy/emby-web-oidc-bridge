@@ -159,7 +159,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 	expectedOrder := []apiCall{
 		{Method: http.MethodGet, Path: "/Users/Query"},
 		{Method: http.MethodPost, Path: "/Users/New"},
-		{Method: http.MethodPost, Path: "/Users/created-user-001/Password"},
+		{Method: http.MethodGet, Path: "/Users/created-user-001"},
 		{Method: http.MethodPost, Path: "/Users/created-user-001/Password"},
 		{Method: http.MethodPost, Path: "/Users/created-user-001/Policy"},
 		{Method: http.MethodPost, Path: "/Users/AuthenticateByName"},
@@ -393,7 +393,7 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 
 	expectedOrder := []apiCall{
 		{Method: http.MethodGet, Path: "/Users/Query"},
-		{Method: http.MethodPost, Path: "/Users/adopted-emby-555/Password"},
+		{Method: http.MethodGet, Path: "/Users/adopted-emby-555"},
 		{Method: http.MethodPost, Path: "/Users/adopted-emby-555/Password"},
 		{Method: http.MethodPost, Path: "/Users/AuthenticateByName"},
 	}
