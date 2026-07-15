@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -626,5 +627,22 @@ func TestNewClient_TrailingSlash(t *testing.T) {
 	client := NewClient("http://emby:8096/emby/", "key")
 	if client.baseURL != "http://emby:8096/emby" {
 		t.Errorf("baseURL = %q, want trailing slash trimmed", client.baseURL)
+	}
+}
+
+func TestIsNotFound(t *testing.T) {
+	if IsNotFound(nil) {
+		t.Fatal("expected false for nil error")
+	}
+	if IsNotFound(errors.New("other error")) {
+		t.Fatal("expected false for non-API error")
+	}
+	if IsNotFound(fmt.Errorf("wrapped: %w", &APIError{StatusCode: http.StatusNotFound})) {
+		// ok
+	} else {
+		t.Fatal("expected true for wrapped 404 API error")
+	}
+	if IsNotFound(&APIError{StatusCode: http.StatusInternalServerError}) {
+		t.Fatal("expected false for 500 API error")
 	}
 }

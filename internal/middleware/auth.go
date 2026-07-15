@@ -271,6 +271,14 @@ func respondUsernameSyncError(w http.ResponseWriter, sub string, err error) {
 	http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 }
 
+func respondLinkedUserMissing(w http.ResponseWriter, sub, embyUserID string) {
+	slog.Warn("linked Emby user no longer exists",
+		"sub", sub,
+		"emby_user_id", embyUserID,
+	)
+	http.Error(w, "Emby account linked to this login was removed. Contact an administrator.", http.StatusForbidden)
+}
+
 // Auth returns middleware that extracts headers, provisions users, and authenticates with Emby.
 // Users are identified by their OIDC sub (subject) claim. The Emby account username is set to
 // the OIDC preferred_username claim.
@@ -427,9 +435,21 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 
 				// Authenticate with the linked Emby account's actual username, which may
 				// differ from OIDC preferred_username (e.g. after a username mapping change).
-				if embyUser, getErr := embyClient.GetUser(ctx, embyUserID); getErr == nil {
-					embyUsername = embyUser.Name
+				embyUser, getErr := embyClient.GetUser(ctx, embyUserID)
+				if getErr != nil {
+					if emby.IsNotFound(getErr) {
+						respondLinkedUserMissing(w, headers.Sub, embyUserID)
+						return
+					}
+					slog.Error("failed to fetch linked Emby user",
+						"sub", headers.Sub,
+						"emby_user_id", embyUserID,
+						"error", getErr,
+					)
+					http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+					return
 				}
+				embyUsername = embyUser.Name
 
 				desiredUsername := headers.embyUsername()
 
@@ -567,116 +587,56 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 
 					staleEmbyUserID := embyUserID
 
-					slog.Warn("authentication failed for existing DB user, checking if user was deleted from Emby",
+					slog.Warn("authentication failed for existing DB user, attempting re-adoption",
 						"sub", headers.Sub,
 						"emby_user_id", staleEmbyUserID,
 						"error", err,
 					)
 
-					// Delete stale cache entry.
+					linkedUser, getErr := embyClient.GetUser(ctx, staleEmbyUserID)
+					if getErr != nil {
+						if emby.IsNotFound(getErr) {
+							respondLinkedUserMissing(w, headers.Sub, staleEmbyUserID)
+							return
+						}
+						slog.Error("failed to fetch linked Emby user during re-adoption",
+							"sub", headers.Sub,
+							"emby_user_id", staleEmbyUserID,
+							"error", getErr,
+						)
+						http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+						return
+					}
+
 					sessionCache.Delete(headers.Sub)
 
-					// Delete stale DB record.
+					embyUserID = linkedUser.ID
+					embyUsername = linkedUser.Name
+					userPassword = password.Generate()
+
+					slog.Warn("re-adopting Emby user after auth failure",
+						"sub", headers.Sub,
+						"emby_user_id", embyUserID,
+					)
+					if pwErr := embyClient.UpdatePassword(ctx, embyUserID, userPassword); pwErr != nil {
+						slog.Error("failed to update password during re-adoption",
+							"sub", headers.Sub,
+							"error", pwErr,
+						)
+						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+						return
+					}
+
 					if delErr := database.DeleteUser(headers.Sub); delErr != nil {
-						slog.Error("failed to delete stale user record",
+						slog.Error("failed to delete user record before re-adoption",
 							"sub", headers.Sub,
 							"error", delErr,
 						)
 						http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 						return
 					}
-
-					// Prefer the previously linked Emby account over creating a duplicate.
-					var existingUser *emby.User
-					if staleEmbyUserID != "" {
-						linkedUser, getErr := embyClient.GetUser(ctx, staleEmbyUserID)
-						if getErr == nil {
-							existingUser = linkedUser
-							embyUsername = linkedUser.Name
-						}
-					}
-					if existingUser == nil {
-						var lookupErr error
-						existingUser, lookupErr = embyClient.FindUserByName(ctx, headers.embyUsername())
-						if lookupErr != nil {
-							slog.Error("emby user lookup failed during re-provision check",
-								"sub", headers.Sub,
-								"error", lookupErr,
-							)
-							http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
-							return
-						}
-						if existingUser != nil {
-							embyUsername = existingUser.Name
-						}
-					}
-
-					// Generate a new password and re-provision.
-					userPassword = password.Generate()
-
-					if existingUser != nil {
-						// User still exists in Emby — update password only; preserve existing policy.
-						embyUserID = existingUser.ID
-						slog.Warn("re-adopting Emby user after auth failure",
-							"sub", headers.Sub,
-							"emby_user_id", embyUserID,
-						)
-						if pwErr := embyClient.UpdatePassword(ctx, embyUserID, userPassword); pwErr != nil {
-							slog.Error("failed to update password during re-provision",
-								"sub", headers.Sub,
-								"error", pwErr,
-							)
-							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-							return
-						}
-					} else {
-						// User was deleted from Emby — create fresh.
-						slog.Warn("user deleted from Emby, re-provisioning",
-							"sub", headers.Sub,
-							"username", embyUsername,
-						)
-						newUser, createErr := embyClient.CreateUser(ctx, embyUsername, templateUserID)
-						if createErr != nil {
-							slog.Error("failed to re-create user in Emby",
-								"sub", headers.Sub,
-								"error", createErr,
-							)
-							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-							return
-						}
-						embyUserID = newUser.ID
-
-						if pwErr := embyClient.UpdatePassword(ctx, embyUserID, userPassword); pwErr != nil {
-							slog.Error("failed to set password for re-created user",
-								"sub", headers.Sub,
-								"error", pwErr,
-							)
-							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-							return
-						}
-
-						policyJSON, polBuildErr := buildUserPolicy(templatePolicy)
-						if polBuildErr != nil {
-							slog.Error("failed to build user policy for re-created user",
-								"sub", headers.Sub,
-								"error", polBuildErr,
-							)
-							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-							return
-						}
-						if polErr := embyClient.UpdatePolicyRaw(ctx, embyUserID, policyJSON); polErr != nil {
-							slog.Error("failed to update policy for re-created user",
-								"sub", headers.Sub,
-								"error", polErr,
-							)
-							http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-							return
-						}
-					}
-
-					// Store new record in DB.
 					if insErr := database.InsertUser(headers.Sub, embyUserID, userPassword); insErr != nil {
-						slog.Error("failed to store re-provisioned user in database",
+						slog.Error("failed to store re-adopted user in database",
 							"sub", headers.Sub,
 							"error", insErr,
 						)
@@ -684,10 +644,9 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						return
 					}
 
-					// Retry authentication.
 					authResult, err = embyClient.AuthenticateByName(ctx, embyUsername, userPassword)
 					if err != nil {
-						slog.Error("authentication still failed after re-provision",
+						slog.Error("authentication still failed after re-adoption",
 							"sub", headers.Sub,
 							"error", err,
 						)
@@ -695,7 +654,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 						return
 					}
 
-					slog.Info("user re-provisioned and authenticated successfully",
+					slog.Info("user re-adopted and authenticated successfully",
 						"sub", headers.Sub,
 						"emby_user_id", embyUserID,
 					)

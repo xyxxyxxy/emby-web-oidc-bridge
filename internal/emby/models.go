@@ -1,6 +1,7 @@
 package emby
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -68,6 +69,12 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("emby API error: status %d: %s", e.StatusCode, e.Message)
+}
+
+// IsNotFound reports whether err is an Emby API 404 response.
+func IsNotFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
 // checkResponse checks the HTTP response status code and returns an error for non-2xx responses.

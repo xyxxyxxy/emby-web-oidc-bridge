@@ -190,6 +190,140 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 	}
 }
 
+// TestAuth_LinkedUserDeleted_GetUser404 verifies login is blocked when a linked Emby user was deleted.
+func TestAuth_LinkedUserDeleted_GetUser404(t *testing.T) {
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	err = database.InsertUser("sub-deleted", "deleted-user-id", "storedpw")
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	var createUserCalled bool
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
+			createUserCalled = true
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.HandleFunc("/Users/deleted-user-id", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Sub", "sub-deleted")
+	req.Header.Set("X-Forwarded-Preferred-Username", "Alice")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected status %d, got %d", http.StatusForbidden, rr.Code)
+	}
+	if next.called {
+		t.Error("next handler should not have been called")
+	}
+	if createUserCalled {
+		t.Error("CreateUser should not have been called")
+	}
+
+	record, err := database.FindUserBySub("sub-deleted")
+	if err != nil {
+		t.Fatalf("FindUserBySub failed: %v", err)
+	}
+	if record == nil {
+		t.Fatal("expected DB record to be preserved")
+	}
+	if record.EmbyUserID != "deleted-user-id" {
+		t.Errorf("expected emby_user_id %q, got %q", "deleted-user-id", record.EmbyUserID)
+	}
+}
+
+// TestAuth_LinkedUserDeleted_AuthFailure verifies login is blocked when auth fails and the linked user is gone.
+func TestAuth_LinkedUserDeleted_AuthFailure(t *testing.T) {
+	database, err := db.Open(testDBURI())
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+	defer func() { _ = database.Close() }()
+
+	err = database.InsertUser("sub-deleted-auth", "deleted-auth-id", "storedpw")
+	if err != nil {
+		t.Fatalf("failed to insert user: %v", err)
+	}
+
+	var getUserCalls atomic.Int32
+	var createUserCalled bool
+	srv := setupEmbyServer(func(mux *http.ServeMux) {
+		mux.HandleFunc("/Users/New", func(w http.ResponseWriter, r *http.Request) {
+			createUserCalled = true
+			w.WriteHeader(http.StatusOK)
+		})
+		mux.HandleFunc("/Users/deleted-auth-id", func(w http.ResponseWriter, r *http.Request) {
+			if getUserCalls.Add(1) <= 2 {
+				resp := map[string]interface{}{
+					"Id":   "deleted-auth-id",
+					"Name": "Alice",
+					"Policy": map[string]interface{}{
+						"IsDisabled":                 false,
+						"IsHidden":                   true,
+						"EnableUserPreferenceAccess": false,
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(resp)
+				return
+			}
+			http.Error(w, "Not Found", http.StatusNotFound)
+		})
+		mux.HandleFunc("/Users/AuthenticateByName", func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		})
+	})
+	defer srv.Close()
+
+	client := emby.NewClient(srv.URL, "test-key")
+	next := &nextHandler{}
+	handler := middleware.Auth(client, database, "template-user-id", testTemplatePolicy, "")(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Sub", "sub-deleted-auth")
+	req.Header.Set("X-Forwarded-Preferred-Username", "Alice")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected status %d, got %d", http.StatusForbidden, rr.Code)
+	}
+	if next.called {
+		t.Error("next handler should not have been called")
+	}
+	if createUserCalled {
+		t.Error("CreateUser should not have been called")
+	}
+
+	record, err := database.FindUserBySub("sub-deleted-auth")
+	if err != nil {
+		t.Fatalf("FindUserBySub failed: %v", err)
+	}
+	if record == nil {
+		t.Fatal("expected DB record to be preserved")
+	}
+	if record.EmbyUserID != "deleted-auth-id" {
+		t.Errorf("expected emby_user_id %q, got %q", "deleted-auth-id", record.EmbyUserID)
+	}
+}
+
 // TestAuth_ExistingUserPreferredUsernameMismatch verifies that auth fails with 409
 // when OIDC preferred_username is already used by another Emby account.
 func TestAuth_ExistingUserPreferredUsernameMismatch(t *testing.T) {

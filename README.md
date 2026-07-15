@@ -216,6 +216,15 @@ Mid-session avatar changes are applied on the next session establishment. Your O
 - Passwords are 8 lowercase alphanumeric characters, optimized for easy entry on TV remotes
 - Passwords are stored in plaintext in SQLite (by design — they're not secrets)
 
+### Deleted Emby Users
+
+If an Emby account linked to an OIDC user is deleted in Emby, the bridge **blocks login** (403 Forbidden) instead of silently creating a new account. The SQLite link is preserved so admins can investigate.
+
+**Admin recovery options:**
+
+1. **Restore the Emby user** — if the account is restored with the same user ID, login works again on the next session establishment.
+2. **Allow fresh provisioning** — delete the user's row from `users.db` (by `oidc_sub`), then have the user log in again. The bridge will create or adopt an Emby account as on first login.
+
 ## Policy Management
 
 The bridge enforces minimal policy overrides to function correctly, while leaving all other settings under admin control.
