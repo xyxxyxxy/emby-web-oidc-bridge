@@ -34,6 +34,7 @@ func main() {
 		"emby_api_url", cfg.EmbyAPIURL,
 		"database_path", cfg.DatabasePath,
 		"template_user_name", cfg.TemplateUserName,
+		"watchparty_url", cfg.WatchpartyURL,
 	)
 
 	// Open database.
@@ -97,6 +98,9 @@ func main() {
 	// /account — trusted proxy check only (account page reads sub from headers/JWT).
 	mux.Handle("GET /account", trustedProxy(http.HandlerFunc(handler.Account(database))))
 
+	// /api/credentials — JSON endpoint for authenticated user's Emby credentials.
+	mux.Handle("GET /api/credentials", trustedProxy(auth(http.HandlerFunc(handler.Credentials(database)))))
+
 	// / — redirect to /web/index.html (which handles credential injection).
 	mux.Handle("GET /{$}", trustedProxy(auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/web/index.html", http.StatusFound)
@@ -104,6 +108,27 @@ func main() {
 
 	// /web/index.html — fetch real Emby page, inject credentials inline.
 	mux.Handle("GET /web/index.html", trustedProxy(auth(http.HandlerFunc(handler.InjectCredentials(cfg.EmbyAPIURL)))))
+
+	// /watchparty/ — optional watchparty integration.
+	// GET /watchparty/ without ?u=1 serves a page that sets the username in
+	// localStorage and redirects. All other /watchparty/ requests are proxied.
+	if cfg.WatchpartyEnabled() {
+		watchpartyProxy := handler.WatchpartyProxy(cfg.WatchpartyURL)
+		mux.Handle("/watchparty/", trustedProxy(auth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// If this is the exact root path without the "u" param, serve the username page.
+			if r.URL.Path == "/watchparty/" && r.URL.Query().Get("u") == "" {
+				handler.WatchpartySetUsername()(w, r)
+				return
+			}
+			watchpartyProxy.ServeHTTP(w, r)
+		}))))
+	}
+
+	if cfg.WatchpartyEnabled() {
+		slog.Info("watchparty feature enabled", "watchparty_url", cfg.WatchpartyURL)
+	} else {
+		slog.Info("watchparty feature disabled")
+	}
 
 	// /* — full middleware chain: trustedProxy → auth → proxy.
 	mux.Handle("/", trustedProxy(auth(proxyHandler)))

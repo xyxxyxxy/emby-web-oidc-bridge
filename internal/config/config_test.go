@@ -16,6 +16,7 @@ func clearEnv() {
 	_ = os.Unsetenv("TRUSTED_PROXIES")
 	_ = os.Unsetenv("BRIDGE_PORT")
 	_ = os.Unsetenv("DATABASE_PATH")
+	_ = os.Unsetenv("EMBY_WATCHPARTY_URL")
 }
 
 func setRequiredEnv() {

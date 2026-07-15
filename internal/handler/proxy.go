@@ -16,6 +16,7 @@ var authTokenKey = &contextKey{"auth-token"}
 var authUserIDKey = &contextKey{"auth-user-id"}
 var authServerIDKey = &contextKey{"auth-server-id"}
 var authSubKey = &contextKey{"auth-sub"}
+var authUsernameKey = &contextKey{"auth-username"}
 
 // WithAuthToken returns a new context with the given Emby auth token stored.
 // This is intended to be called by the auth middleware after authenticating with Emby.
@@ -60,6 +61,19 @@ func AuthServerIDFromContext(ctx context.Context) string {
 func AuthSubFromContext(ctx context.Context) string {
 	sub, _ := ctx.Value(authSubKey).(string)
 	return sub
+}
+
+// WithAuthUsername stores the resolved OIDC preferred_username in context.
+// This is used by the watchparty handler to inject the username into HTML responses.
+func WithAuthUsername(ctx context.Context, username string) context.Context {
+	return context.WithValue(ctx, authUsernameKey, username)
+}
+
+// AuthUsernameFromContext retrieves the resolved OIDC preferred_username from the request context.
+// Returns an empty string if no username is present.
+func AuthUsernameFromContext(ctx context.Context) string {
+	u, _ := ctx.Value(authUsernameKey).(string)
+	return u
 }
 
 // Proxy returns an http.Handler that reverse-proxies requests to Emby.

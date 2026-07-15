@@ -159,7 +159,7 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 	expectedOrder := []apiCall{
 		{Method: http.MethodGet, Path: "/Users/Query"},
 		{Method: http.MethodPost, Path: "/Users/New"},
-		{Method: http.MethodPost, Path: "/Users/created-user-001/Password"},
+		{Method: http.MethodGet, Path: "/Users/created-user-001"},
 		{Method: http.MethodPost, Path: "/Users/created-user-001/Password"},
 		{Method: http.MethodPost, Path: "/Users/created-user-001/Policy"},
 		{Method: http.MethodPost, Path: "/Users/AuthenticateByName"},
@@ -197,7 +197,7 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-existing", "Existing User", "existing@example.com", "emby-user-100", "mypassw1")
+	err = database.InsertUser("sub-existing", "emby-user-100", "mypassw1")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -290,11 +290,14 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 	copy(syncCalls, calls)
 	mu.Unlock()
 
-	if len(syncCalls) < 1 {
-		t.Fatal("expected at least 1 API call")
+	if len(syncCalls) < 2 {
+		t.Fatalf("expected at least 2 API calls, got %d: %v", len(syncCalls), syncCalls)
 	}
-	if syncCalls[0].Method != http.MethodPost || syncCalls[0].Path != "/Users/AuthenticateByName" {
-		t.Errorf("first call should be POST /Users/AuthenticateByName, got %s %s", syncCalls[0].Method, syncCalls[0].Path)
+	if syncCalls[0].Method != http.MethodGet || syncCalls[0].Path != "/Users/emby-user-100" {
+		t.Errorf("first call should be GET /Users/emby-user-100, got %s %s", syncCalls[0].Method, syncCalls[0].Path)
+	}
+	if syncCalls[1].Method != http.MethodPost || syncCalls[1].Path != "/Users/AuthenticateByName" {
+		t.Errorf("second call should be POST /Users/AuthenticateByName, got %s %s", syncCalls[1].Method, syncCalls[1].Path)
 	}
 }
 
@@ -393,7 +396,7 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 
 	expectedOrder := []apiCall{
 		{Method: http.MethodGet, Path: "/Users/Query"},
-		{Method: http.MethodPost, Path: "/Users/adopted-emby-555/Password"},
+		{Method: http.MethodGet, Path: "/Users/adopted-emby-555"},
 		{Method: http.MethodPost, Path: "/Users/adopted-emby-555/Password"},
 		{Method: http.MethodPost, Path: "/Users/AuthenticateByName"},
 	}
@@ -433,7 +436,7 @@ func TestIntegration_RequestBodyPreserved(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-body", "Body User", "body@example.com", "emby-body-user", "bodypass1")
+	err = database.InsertUser("sub-body", "emby-body-user", "bodypass1")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -508,7 +511,7 @@ func TestIntegration_AuthTokenForwardedToProxy(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-token", "Token User", "token@example.com", "emby-token-user", "tokenpw1")
+	err = database.InsertUser("sub-token", "emby-token-user", "tokenpw1")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}

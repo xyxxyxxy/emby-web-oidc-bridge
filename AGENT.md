@@ -55,8 +55,8 @@ Do NOT run `go build`, `go test`, `go mod tidy`, or any Go commands directly on 
 - **No external HTTP framework**: stdlib `net/http` is production-ready
 - **No retry logic**: Emby API calls are not retried — failures are logged and returned immediately
 - **Plaintext password storage**: Passwords are not security-critical (8-char alphanumeric for TV remotes)
-- **In-memory session cache**: 15-minute TTL per OIDC sub; evicted on logout or Emby 401
-- **Non-blocking side effects**: Profile image sync and policy updates run in goroutines
+- **In-memory session cache**: Token per OIDC `sub`; no TTL — reused until Emby returns 401 or the bridge restarts
+- **Non-blocking side effects**: Profile image sync and policy updates run in goroutines on session establishment only
 
 ## Environment Variables
 
@@ -94,7 +94,8 @@ Do NOT run `go build`, `go test`, `go mod tidy`, or any Go commands directly on 
 - Context propagation: Pass `context.Context` through all layers
 - Auth token sharing: `handler.WithAuthSession(ctx, token, userID, serverID)` / `handler.AuthTokenFromContext(ctx)`
 - OIDC sub in context: `handler.WithAuthSub(ctx, sub)` / `handler.AuthSubFromContext(ctx)`
-- Session cache: In-memory `sync.Map` keyed by OIDC sub with 15-min TTL; evicted on 401 from Emby
+- Session cache: In-memory `sync.Map` keyed by OIDC sub; no TTL; evicted on Emby 401 or bridge restart
+- Session establishment logs: `slog.Info("emby session established", "reason", "first_login"|"returning_user", ...)`
 - Middleware pattern: `func(http.Handler) http.Handler`
 
 ## Development Workflow

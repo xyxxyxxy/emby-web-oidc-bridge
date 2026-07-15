@@ -22,7 +22,10 @@ const accountPageTemplate = `<!DOCTYPE html>
         h1 { color: #fff; }
         .credentials { background: #2a2a2a; padding: 1.5rem; border-radius: 8px; margin: 1rem 0; border: 1px solid #3a3a3a; }
         .credentials dt { font-weight: bold; margin-top: 1rem; color: #aaa; }
-        .credentials dd { margin: 0.25rem 0 0 0; font-family: monospace; font-size: 1.1rem; color: #fff; }
+        .credentials dd { margin: 0.25rem 0 0 0; font-family: monospace; font-size: 1.1rem; color: #fff; display: flex; align-items: center; gap: 0.5rem; }
+        .copy-btn { background: #3a3a3a; border: 1px solid #555; color: #ccc; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+        .copy-btn:hover { background: #4a4a4a; color: #fff; }
+        .copy-btn.copied { background: #2e7d32; border-color: #4caf50; color: #fff; }
         .note { color: #888; font-size: 0.9rem; margin-top: 1.5rem; }
     </style>
 </head>
@@ -31,12 +34,25 @@ const accountPageTemplate = `<!DOCTYPE html>
     <div class="credentials">
         <dl>
             <dt>Username</dt>
-            <dd>{{.Username}}</dd>
+            <dd><span id="username">{{.Username}}</span><button class="copy-btn" onclick="copyText('username', this)" aria-label="Copy username">Copy</button></dd>
             <dt>Password</dt>
-            <dd>{{.Password}}</dd>
+            <dd><span id="password">{{.Password}}</span><button class="copy-btn" onclick="copyText('password', this)" aria-label="Copy password">Copy</button></dd>
         </dl>
     </div>
     <p class="note">Use these credentials to sign in on Emby TV and mobile apps where OIDC login is not available.</p>
+    <script>
+    function copyText(id, btn) {
+        var text = document.getElementById(id).textContent;
+        navigator.clipboard.writeText(text).then(function() {
+            btn.textContent = 'Copied!';
+            btn.classList.add('copied');
+            setTimeout(function() {
+                btn.textContent = 'Copy';
+                btn.classList.remove('copied');
+            }, 2000);
+        });
+    }
+    </script>
 </body>
 </html>`
 
@@ -93,6 +109,59 @@ func ExtractSubFromRequest(r *http.Request) string {
 	return claims.Sub
 }
 
+// ExtractPreferredUsernameFromRequest extracts the OIDC preferred_username from the ID token or headers.
+func ExtractPreferredUsernameFromRequest(r *http.Request) string {
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
+		if preferredUsername := preferredUsernameFromJWT(authHeader[7:]); preferredUsername != "" {
+			return preferredUsername
+		}
+	}
+
+	preferredUsername := r.Header.Get("X-Forwarded-Preferred-Username")
+	if preferredUsername == "" {
+		preferredUsername = r.Header.Get("X-Auth-Request-Preferred-Username")
+	}
+	if preferredUsername != "" {
+		return preferredUsername
+	}
+
+	return ""
+}
+
+func preferredUsernameFromJWT(token string) string {
+	if token == "" {
+		return ""
+	}
+
+	return extractPreferredUsernameClaim(token)
+}
+
+func extractPreferredUsernameClaim(token string) string {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload := parts[1]
+	switch len(payload) % 4 {
+	case 2:
+		payload += "=="
+	case 3:
+		payload += "="
+	}
+	decoded, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		PreferredUsername string `json:"preferred_username"`
+	}
+	if json.Unmarshal(decoded, &claims) != nil {
+		return ""
+	}
+	return claims.PreferredUsername
+}
+
 // Account returns an http.HandlerFunc for the /account endpoint.
 // Renders an HTML page showing the user's Emby username and password.
 func Account(database *db.DB) http.HandlerFunc {
@@ -100,6 +169,12 @@ func Account(database *db.DB) http.HandlerFunc {
 		sub := ExtractSubFromRequest(r)
 		if sub == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		username := ExtractPreferredUsernameFromRequest(r)
+		if username == "" {
+			http.Error(w, "Unauthorized: missing preferred_username", http.StatusUnauthorized)
 			return
 		}
 
@@ -112,12 +187,6 @@ func Account(database *db.DB) http.HandlerFunc {
 		if record == nil {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
-		}
-
-		// Emby username is name > email.
-		username := record.Name
-		if username == "" {
-			username = record.Email
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

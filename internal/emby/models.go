@@ -1,6 +1,7 @@
 package emby
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 )
@@ -25,9 +26,10 @@ type authenticateResponse struct {
 }
 
 type userJSON struct {
-	ID     string          `json:"Id"`
-	Name   string          `json:"Name"`
-	Policy *userPolicyJSON `json:"Policy,omitempty"`
+	ID                      string          `json:"Id"`
+	Name                    string          `json:"Name"`
+	HasConfiguredPassword   bool            `json:"HasConfiguredPassword"`
+	Policy                  *userPolicyJSON `json:"Policy,omitempty"`
 }
 
 type userPolicyJSON struct {
@@ -38,15 +40,16 @@ type userPolicyJSON struct {
 
 type updatePasswordRequest struct {
 	ID            string `json:"Id"`
-	NewPw         string `json:"NewPw"`
-	ResetPassword bool   `json:"ResetPassword"`
+	NewPw         string `json:"NewPw,omitempty"`
+	ResetPassword bool   `json:"ResetPassword,omitempty"`
 }
 
 // toUser converts a userJSON to the public User type.
 func (u userJSON) toUser() User {
 	user := User{
-		ID:   u.ID,
-		Name: u.Name,
+		ID:                    u.ID,
+		Name:                  u.Name,
+		HasConfiguredPassword: u.HasConfiguredPassword,
 	}
 	if u.Policy != nil {
 		user.Policy = &UserPolicy{
@@ -66,6 +69,12 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("emby API error: status %d: %s", e.StatusCode, e.Message)
+}
+
+// IsNotFound reports whether err is an Emby API 404 response.
+func IsNotFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound
 }
 
 // checkResponse checks the HTTP response status code and returns an error for non-2xx responses.
