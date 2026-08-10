@@ -66,6 +66,48 @@ func TestProxy_PreservesRequestHeaders(t *testing.T) {
 	}
 }
 
+func TestProxy_NormalizesForwardedForFromRealIP(t *testing.T) {
+	var receivedRealIP string
+	var receivedForwardedFor string
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedRealIP = r.Header.Get("X-Real-IP")
+		receivedForwardedFor = r.Header.Get("X-Forwarded-For")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	proxy := handler.Proxy(backend.URL, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.RemoteAddr = "172.18.0.3:12345"
+	req.Header.Set("X-Real-IP", "2001:db8::1234")
+	req.Header.Set("X-Forwarded-For", "192.168.10.2")
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	if receivedRealIP != "2001:db8::1234" {
+		t.Fatalf(
+			"expected X-Real-IP %q, got %q",
+			"2001:db8::1234",
+			receivedRealIP,
+		)
+	}
+
+	if receivedForwardedFor != "2001:db8::1234, 172.18.0.3" {
+		t.Fatalf(
+			"expected X-Forwarded-For %q, got %q",
+			"2001:db8::1234, 172.18.0.3",
+			receivedForwardedFor,
+		)
+	}
+}
+
 func TestProxy_PreservesRequestBody(t *testing.T) {
 	var receivedBody string
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
