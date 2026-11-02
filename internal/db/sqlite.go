@@ -69,6 +69,8 @@ func Open(path string) (*DB, error) {
 	return &DB{pool: pool}, nil
 }
 
+// migrateSchema upgrades a 1.2.0 database (name/email columns, user_version 0) to v2.
+// beta.1 did not change the schema, so those DBs take the same path.
 func migrateSchema(conn *sqlite.Conn) error {
 	var version int
 	err := sqlitex.Execute(conn, "PRAGMA user_version", &sqlitex.ExecOptions{
@@ -84,7 +86,7 @@ func migrateSchema(conn *sqlite.Conn) error {
 		return nil
 	}
 
-	if version < schemaVersion && usersTableHasColumn(conn, "name") {
+	if usersTableHasColumn(conn, "name") {
 		if err := migrateV1ToV2(conn); err != nil {
 			return err
 		}
