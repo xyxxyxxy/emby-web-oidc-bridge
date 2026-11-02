@@ -70,7 +70,6 @@ func TestIntegrationError_UntrustedIPRejection(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.168.1.1:54321" // Untrusted IP.
-	req.Header.Set("X-Forwarded-Email", "user@example.com")
 	rec := httptest.NewRecorder()
 
 	chain.ServeHTTP(rec, req)
@@ -104,7 +103,6 @@ func TestIntegrationError_MissingSub(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345" // Trusted IP.
 	// No sub header or JWT — only email.
-	req.Header.Set("X-Forwarded-Email", "user@example.com")
 	rec := httptest.NewRecorder()
 
 	chain.ServeHTTP(rec, req)
@@ -137,7 +135,6 @@ func TestIntegrationError_EmbyAPIUnreachable(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Forwarded-Sub", "sub-unreachable")
 	req.Header.Set("X-Forwarded-Preferred-Username", "unreachable")
-	req.Header.Set("X-Forwarded-Email", "unreachable@example.com")
 	rec := httptest.NewRecorder()
 
 	chain.ServeHTTP(rec, req)
@@ -183,7 +180,6 @@ func TestIntegrationError_UserCreationFailure(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Forwarded-Sub", "sub-failcreate")
 	req.Header.Set("X-Forwarded-Preferred-Username", "failcreate")
-	req.Header.Set("X-Forwarded-Email", "failcreate@example.com")
 	rec := httptest.NewRecorder()
 
 	chain.ServeHTTP(rec, req)

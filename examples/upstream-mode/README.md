@@ -18,7 +18,7 @@ The bridge extracts user identity from the JWT ID token forwarded by oauth2-prox
 | `preferred_username` | Emby username (required) |
 | `picture` | Profile image URL synced to Emby |
 
-Email/`name` are not used for Emby usernames and are not stored.
+Email/`name` claims are ignored.
 
 ## Request Flow
 

@@ -125,7 +125,7 @@ volumes:
 
 ## oauth2-proxy Configuration
 
-The bridge requires oauth2-proxy to forward the JWT ID token (via `set_authorization_header = true`) so it can extract the `sub`, `preferred_username`, `name`, `email`, and `picture` claims. Two deployment modes are supported:
+The bridge requires oauth2-proxy to forward the JWT ID token (via `set_authorization_header = true`) so it can extract the `sub`, `preferred_username`, and `picture` claims. Two deployment modes are supported:
 
 - **[Upstream mode](examples/upstream-mode/)** (recommended) — oauth2-proxy forwards directly to the bridge
 - **[Forward auth mode](examples/forward-auth-mode/)** — Caddy/Nginx/Traefik handles routing, oauth2-proxy handles auth decisions
@@ -142,7 +142,7 @@ The bridge extracts user identity from the JWT ID token and forwarded headers:
 | `preferred_username` | Emby username (required) |
 | `picture` | Profile image URL synced to Emby |
 
-Email/`name` claims may appear in logs but are not stored. SQLite keeps only the Emby link, credentials, and picture sync state.
+SQLite keeps only the Emby link, credentials, and picture sync state. Email/`name` claims are ignored.
 
 If the preferred username is already taken by another Emby user during account creation, provisioning fails.
 

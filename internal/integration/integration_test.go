@@ -132,8 +132,6 @@ func TestIntegration_NewUserProvisioningFlow(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Forwarded-Sub", "sub-new-integration")
 	req.Header.Set("X-Forwarded-Preferred-Username", "newuser")
-	req.Header.Set("X-Forwarded-User", "New User")
-	req.Header.Set("X-Forwarded-Email", "newuser@example.com")
 	rec := httptest.NewRecorder()
 
 	chain.ServeHTTP(rec, req)
@@ -266,8 +264,6 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:54321"
 	req.Header.Set("X-Forwarded-Sub", "sub-existing")
 	req.Header.Set("X-Forwarded-Preferred-Username", "Existing User")
-	req.Header.Set("X-Forwarded-User", "Existing User")
-	req.Header.Set("X-Forwarded-Email", "existing@example.com")
 	rec := httptest.NewRecorder()
 
 	chain.ServeHTTP(rec, req)
@@ -373,8 +369,6 @@ func TestIntegration_AdoptedUserFlow(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:9999"
 	req.Header.Set("X-Forwarded-Sub", "sub-adopted-int")
 	req.Header.Set("X-Forwarded-Preferred-Username", "Adopted User")
-	req.Header.Set("X-Forwarded-User", "Adopted User")
-	req.Header.Set("X-Forwarded-Email", "adopted@example.com")
 	rec := httptest.NewRecorder()
 
 	chain.ServeHTTP(rec, req)
@@ -485,8 +479,6 @@ func TestIntegration_RequestBodyPreserved(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:11111"
 	req.Header.Set("X-Forwarded-Sub", "sub-body")
 	req.Header.Set("X-Forwarded-Preferred-Username", "Body User")
-	req.Header.Set("X-Forwarded-User", "Body User")
-	req.Header.Set("X-Forwarded-Email", "body@example.com")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -556,8 +548,6 @@ func TestIntegration_AuthTokenForwardedToProxy(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:22222"
 	req.Header.Set("X-Forwarded-Sub", "sub-token")
 	req.Header.Set("X-Forwarded-Preferred-Username", "Token User")
-	req.Header.Set("X-Forwarded-User", "Token User")
-	req.Header.Set("X-Forwarded-Email", "token@example.com")
 	rec := httptest.NewRecorder()
 
 	chain.ServeHTTP(rec, req)
