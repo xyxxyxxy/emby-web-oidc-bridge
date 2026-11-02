@@ -29,12 +29,10 @@ func TestDatabaseRoundTrip(t *testing.T) {
 		defer func() { _ = database.Close() }()
 
 		sub := rapid.StringMatching(`[a-z0-9]{8,20}`).Draw(t, "sub")
-		name := rapid.StringMatching(`[A-Za-z ]{3,20}`).Draw(t, "name")
-		email := rapid.StringMatching(`[a-z]{3,10}@[a-z]{3,8}\.[a-z]{2,4}`).Draw(t, "email")
 		userID := rapid.StringMatching(`[a-f0-9]{32}`).Draw(t, "userID")
 		password := rapid.StringMatching(`[a-z0-9]{8}`).Draw(t, "password")
 
-		err = database.InsertUser(sub, name, email, userID, password)
+		err = database.InsertUser(sub, userID, password)
 		if err != nil {
 			t.Fatalf("InsertUser failed: %v", err)
 		}
@@ -51,12 +49,6 @@ func TestDatabaseRoundTrip(t *testing.T) {
 
 		if record.OIDCSub != sub {
 			t.Fatalf("OIDCSub mismatch: got %q, want %q", record.OIDCSub, sub)
-		}
-		if record.Name != name {
-			t.Fatalf("Name mismatch: got %q, want %q", record.Name, name)
-		}
-		if record.Email != email {
-			t.Fatalf("Email mismatch: got %q, want %q", record.Email, email)
 		}
 		if record.EmbyUserID != userID {
 			t.Fatalf("EmbyUserID mismatch: got %q, want %q", record.EmbyUserID, userID)
@@ -78,17 +70,14 @@ func TestPasswordStability(t *testing.T) {
 
 	rapid.Check(t, func(t *rapid.T) {
 		sub := rapid.StringMatching(`[a-z0-9]{8,20}`).Draw(t, "sub")
-		name := rapid.StringMatching(`[A-Za-z ]{3,20}`).Draw(t, "name")
-		email := rapid.StringMatching(`[a-z]{3,10}@[a-z]{3,8}\.[a-z]{2,4}`).Draw(t, "email")
 		userID := rapid.StringMatching(`[a-f0-9]{32}`).Draw(t, "userID")
 		password := rapid.StringMatching(`[a-z0-9]{8}`).Draw(t, "password")
 
-		err := database.InsertUser(sub, name, email, userID, password)
+		err := database.InsertUser(sub, userID, password)
 		if err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 
-		// Query the user multiple times and verify the password never changes
 		lookups := rapid.IntRange(2, 10).Draw(t, "lookups")
 		for i := 0; i < lookups; i++ {
 			record, err := database.FindUserBySub(sub)

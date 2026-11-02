@@ -197,7 +197,7 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-existing", "Existing User", "existing@example.com", "emby-user-100", "mypassw1")
+	err = database.InsertUser("sub-existing", "emby-user-100", "mypassw1")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -290,11 +290,14 @@ func TestIntegration_ExistingUserLoginFlow(t *testing.T) {
 	copy(syncCalls, calls)
 	mu.Unlock()
 
-	if len(syncCalls) < 1 {
-		t.Fatal("expected at least 1 API call")
+	if len(syncCalls) < 2 {
+		t.Fatalf("expected at least 2 API calls, got %d", len(syncCalls))
 	}
-	if syncCalls[0].Method != http.MethodPost || syncCalls[0].Path != "/Users/AuthenticateByName" {
-		t.Errorf("first call should be POST /Users/AuthenticateByName, got %s %s", syncCalls[0].Method, syncCalls[0].Path)
+	if syncCalls[0].Method != http.MethodGet || syncCalls[0].Path != "/Users/emby-user-100" {
+		t.Errorf("first call should be GET /Users/emby-user-100, got %s %s", syncCalls[0].Method, syncCalls[0].Path)
+	}
+	if syncCalls[1].Method != http.MethodPost || syncCalls[1].Path != "/Users/AuthenticateByName" {
+		t.Errorf("second call should be POST /Users/AuthenticateByName, got %s %s", syncCalls[1].Method, syncCalls[1].Path)
 	}
 }
 
@@ -433,7 +436,7 @@ func TestIntegration_RequestBodyPreserved(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-body", "Body User", "body@example.com", "emby-body-user", "bodypass1")
+	err = database.InsertUser("sub-body", "emby-body-user", "bodypass1")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
@@ -508,7 +511,7 @@ func TestIntegration_AuthTokenForwardedToProxy(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-token", "Token User", "token@example.com", "emby-token-user", "tokenpw1")
+	err = database.InsertUser("sub-token", "emby-token-user", "tokenpw1")
 	if err != nil {
 		t.Fatalf("failed to insert user: %v", err)
 	}
