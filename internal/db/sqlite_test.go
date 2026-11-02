@@ -2,10 +2,14 @@ package db_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
 	"github.com/xyxxyxxy/emby-web-oidc-bridge/internal/db"
+	"zombiezen.com/go/sqlite"
+	"zombiezen.com/go/sqlite/sqlitex"
 )
 
 var testDBCounter atomic.Int64
@@ -31,7 +35,7 @@ func TestInsertAndFindUserBySub(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-123", "Alice", "alice@example.com", "user123", "abcd1234")
+	err = database.InsertUser("sub-123", "user123", "abcd1234")
 	if err != nil {
 		t.Fatalf("InsertUser failed: %v", err)
 	}
@@ -45,12 +49,6 @@ func TestInsertAndFindUserBySub(t *testing.T) {
 	}
 	if record.OIDCSub != "sub-123" {
 		t.Errorf("OIDCSub = %q, want %q", record.OIDCSub, "sub-123")
-	}
-	if record.Name != "Alice" {
-		t.Errorf("Name = %q, want %q", record.Name, "Alice")
-	}
-	if record.Email != "alice@example.com" {
-		t.Errorf("Email = %q, want %q", record.Email, "alice@example.com")
 	}
 	if record.EmbyUserID != "user123" {
 		t.Errorf("EmbyUserID = %q, want %q", record.EmbyUserID, "user123")
@@ -86,12 +84,12 @@ func TestInsertDuplicateUser(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-dup", "Alice", "alice@example.com", "user123", "abcd1234")
+	err = database.InsertUser("sub-dup", "user123", "abcd1234")
 	if err != nil {
 		t.Fatalf("first InsertUser failed: %v", err)
 	}
 
-	err = database.InsertUser("sub-dup", "Bob", "bob@example.com", "user456", "efgh5678")
+	err = database.InsertUser("sub-dup", "user456", "efgh5678")
 	if err == nil {
 		t.Fatal("second InsertUser should have failed for duplicate sub")
 	}
@@ -121,13 +119,11 @@ func TestDeleteUser(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	// Insert a user first.
-	err = database.InsertUser("sub-del", "Delete Me", "delete@example.com", "user-del-1", "pass1234")
+	err = database.InsertUser("sub-del", "user-del-1", "pass1234")
 	if err != nil {
 		t.Fatalf("InsertUser failed: %v", err)
 	}
 
-	// Verify user exists.
 	record, err := database.FindUserBySub("sub-del")
 	if err != nil {
 		t.Fatalf("FindUserBySub failed: %v", err)
@@ -136,13 +132,11 @@ func TestDeleteUser(t *testing.T) {
 		t.Fatal("expected user to exist before deletion")
 	}
 
-	// Delete the user.
 	err = database.DeleteUser("sub-del")
 	if err != nil {
 		t.Fatalf("DeleteUser failed: %v", err)
 	}
 
-	// Verify user is gone.
 	record, err = database.FindUserBySub("sub-del")
 	if err != nil {
 		t.Fatalf("FindUserBySub after delete failed: %v", err)
@@ -159,7 +153,6 @@ func TestDeleteUser_NonExistent(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	// Deleting a non-existent user should not error (DELETE WHERE is a no-op).
 	err = database.DeleteUser("ghost-sub")
 	if err != nil {
 		t.Fatalf("DeleteUser for non-existent user failed: %v", err)
@@ -173,13 +166,11 @@ func TestUpdatePictureURL(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	// Insert a user.
-	err = database.InsertUser("sub-pic", "Pic User", "pic@example.com", "user-pic-1", "picpass")
+	err = database.InsertUser("sub-pic", "user-pic-1", "picpass")
 	if err != nil {
 		t.Fatalf("InsertUser failed: %v", err)
 	}
 
-	// Verify initial state: no picture URL.
 	record, err := database.FindUserBySub("sub-pic")
 	if err != nil {
 		t.Fatalf("FindUserBySub failed: %v", err)
@@ -191,13 +182,11 @@ func TestUpdatePictureURL(t *testing.T) {
 		t.Errorf("expected zero PictureSyncedAt initially, got %v", record.PictureSyncedAt)
 	}
 
-	// Update picture URL.
 	err = database.UpdatePictureURL("sub-pic", "https://example.com/avatar.png")
 	if err != nil {
 		t.Fatalf("UpdatePictureURL failed: %v", err)
 	}
 
-	// Verify updated state.
 	record, err = database.FindUserBySub("sub-pic")
 	if err != nil {
 		t.Fatalf("FindUserBySub after update failed: %v", err)
@@ -217,18 +206,16 @@ func TestUpdatePictureURL_OverwritesPrevious(t *testing.T) {
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-pic2", "Pic2", "pic2@example.com", "user-pic-2", "picpass2")
+	err = database.InsertUser("sub-pic2", "user-pic-2", "picpass2")
 	if err != nil {
 		t.Fatalf("InsertUser failed: %v", err)
 	}
 
-	// Set first picture.
 	err = database.UpdatePictureURL("sub-pic2", "https://example.com/old.png")
 	if err != nil {
 		t.Fatalf("first UpdatePictureURL failed: %v", err)
 	}
 
-	// Overwrite with new picture.
 	err = database.UpdatePictureURL("sub-pic2", "https://example.com/new.png")
 	if err != nil {
 		t.Fatalf("second UpdatePictureURL failed: %v", err)
@@ -243,40 +230,98 @@ func TestUpdatePictureURL_OverwritesPrevious(t *testing.T) {
 	}
 }
 
-func TestUpdateUserIdentity(t *testing.T) {
-	database, err := db.Open(testDBURI())
+func TestMigrateSchema_v1ToV2(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "migrate.db")
+	uri := "file:" + dbPath + "?mode=rwc"
+
+	conn, err := sqlite.OpenConn(dbPath, sqlite.OpenReadWrite|sqlite.OpenCreate)
 	if err != nil {
-		t.Fatalf("Open failed: %v", err)
+		t.Fatalf("open legacy db: %v", err)
+	}
+
+	legacySchema := `CREATE TABLE users (
+  oidc_sub TEXT PRIMARY KEY,
+  name TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  emby_user_id TEXT NOT NULL,
+  password TEXT NOT NULL,
+  picture_url TEXT NOT NULL DEFAULT '',
+  picture_synced_at TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);`
+	if err := sqlitex.ExecuteScript(conn, legacySchema, nil); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	err = sqlitex.Execute(conn, `INSERT INTO users (oidc_sub, name, email, emby_user_id, password, picture_url)
+VALUES ('sub-migrate', 'Legacy Name', 'legacy@example.com', 'emby-legacy-1', 'legacypass', 'https://example.com/pic.png')`, nil)
+	if err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close legacy conn: %v", err)
+	}
+
+	database, err := db.Open(uri)
+	if err != nil {
+		t.Fatalf("Open migration failed: %v", err)
 	}
 	defer func() { _ = database.Close() }()
 
-	err = database.InsertUser("sub-identity", "Old Name", "old@example.com", "user-id-1", "pass123")
+	conn, err = sqlite.OpenConn(dbPath, sqlite.OpenReadWrite)
 	if err != nil {
-		t.Fatalf("InsertUser failed: %v", err)
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	var userVersion int
+	err = sqlitex.Execute(conn, "PRAGMA user_version", &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			userVersion = int(stmt.ColumnInt64(0))
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if userVersion != 2 {
+		t.Errorf("user_version = %d, want 2", userVersion)
 	}
 
-	// Update identity.
-	err = database.UpdateUserIdentity("sub-identity", "New Name", "new@example.com")
+	hasNameColumn := false
+	err = sqlitex.Execute(conn, "PRAGMA table_info(users)", &sqlitex.ExecOptions{
+		ResultFunc: func(stmt *sqlite.Stmt) error {
+			if stmt.GetText("name") == "name" {
+				hasNameColumn = true
+			}
+			return nil
+		},
+	})
 	if err != nil {
-		t.Fatalf("UpdateUserIdentity failed: %v", err)
+		t.Fatalf("table_info: %v", err)
+	}
+	if hasNameColumn {
+		t.Error("expected name column to be removed after migration")
 	}
 
-	record, err := database.FindUserBySub("sub-identity")
+	record, err := database.FindUserBySub("sub-migrate")
 	if err != nil {
 		t.Fatalf("FindUserBySub failed: %v", err)
 	}
-	if record.Name != "New Name" {
-		t.Errorf("Name = %q, want %q", record.Name, "New Name")
+	if record == nil {
+		t.Fatal("expected migrated user record")
 	}
-	if record.Email != "new@example.com" {
-		t.Errorf("Email = %q, want %q", record.Email, "new@example.com")
+	if record.EmbyUserID != "emby-legacy-1" {
+		t.Errorf("EmbyUserID = %q, want emby-legacy-1", record.EmbyUserID)
 	}
-	// Other fields should be unchanged.
-	if record.EmbyUserID != "user-id-1" {
-		t.Errorf("EmbyUserID = %q, want %q", record.EmbyUserID, "user-id-1")
+	if record.Password != "legacypass" {
+		t.Errorf("Password = %q, want legacypass", record.Password)
 	}
-	if record.Password != "pass123" {
-		t.Errorf("Password = %q, want %q", record.Password, "pass123")
+	if record.PictureURL != "https://example.com/pic.png" {
+		t.Errorf("PictureURL = %q, want https://example.com/pic.png", record.PictureURL)
+	}
+
+	if err := os.Remove(dbPath); err != nil {
+		t.Fatalf("cleanup db file: %v", err)
 	}
 }
 

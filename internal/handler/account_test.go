@@ -41,12 +41,32 @@ func TestAccount_MissingSub_Returns401(t *testing.T) {
 	}
 }
 
+func TestAccount_MissingPreferredUsername_Returns401(t *testing.T) {
+	database := setupTestDB(t)
+	err := database.InsertUser("sub-alice", "emby123", "abc12def")
+	if err != nil {
+		t.Fatalf("failed to insert test user: %v", err)
+	}
+	h := handler.Account(database)
+
+	req := httptest.NewRequest(http.MethodGet, "/account", nil)
+	req.Header.Set("X-Forwarded-Sub", "sub-alice")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d", rec.Code)
+	}
+}
+
 func TestAccount_UserNotFound_Returns404(t *testing.T) {
 	database := setupTestDB(t)
 	h := handler.Account(database)
 
 	req := httptest.NewRequest(http.MethodGet, "/account", nil)
 	req.Header.Set("X-Forwarded-Sub", "unknown-sub")
+	req.Header.Set("X-Forwarded-Preferred-Username", "unknown")
 	rec := httptest.NewRecorder()
 
 	h.ServeHTTP(rec, req)
@@ -59,7 +79,7 @@ func TestAccount_UserNotFound_Returns404(t *testing.T) {
 func TestAccount_ValidUser_RendersCredentials(t *testing.T) {
 	database := setupTestDB(t)
 
-	err := database.InsertUser("sub-alice", "Alice", "alice@example.com", "emby123", "abc12def")
+	err := database.InsertUser("sub-alice", "emby123", "abc12def")
 	if err != nil {
 		t.Fatalf("failed to insert test user: %v", err)
 	}
@@ -68,6 +88,7 @@ func TestAccount_ValidUser_RendersCredentials(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/account", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-alice")
+	req.Header.Set("X-Forwarded-Preferred-Username", "Alice")
 	rec := httptest.NewRecorder()
 
 	h.ServeHTTP(rec, req)
@@ -78,9 +99,8 @@ func TestAccount_ValidUser_RendersCredentials(t *testing.T) {
 
 	body := rec.Body.String()
 
-	// Username should be the name field (not email).
 	if !strings.Contains(body, "Alice") {
-		t.Error("response body does not contain username (name)")
+		t.Error("response body does not contain preferred_username")
 	}
 	if !strings.Contains(body, "abc12def") {
 		t.Error("response body does not contain user password")
@@ -92,40 +112,10 @@ func TestAccount_ValidUser_RendersCredentials(t *testing.T) {
 	}
 }
 
-func TestAccount_FallsBackToEmailWhenNameEmpty(t *testing.T) {
-	database := setupTestDB(t)
-
-	// Insert user with empty name — email should be used as username.
-	err := database.InsertUser("sub-noname", "", "noname@example.com", "emby-nn", "nnpass99")
-	if err != nil {
-		t.Fatalf("failed to insert test user: %v", err)
-	}
-
-	h := handler.Account(database)
-
-	req := httptest.NewRequest(http.MethodGet, "/account", nil)
-	req.Header.Set("X-Forwarded-Sub", "sub-noname")
-	rec := httptest.NewRecorder()
-
-	h.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rec.Code)
-	}
-
-	body := rec.Body.String()
-	if !strings.Contains(body, "noname@example.com") {
-		t.Error("response body does not contain email as fallback username")
-	}
-	if !strings.Contains(body, "nnpass99") {
-		t.Error("response body does not contain user password")
-	}
-}
-
 func TestAccount_XAuthRequestSubFallback(t *testing.T) {
 	database := setupTestDB(t)
 
-	err := database.InsertUser("sub-fallback", "Fallback", "fallback@example.com", "emby-fb", "fbpass99")
+	err := database.InsertUser("sub-fallback", "emby-fb", "fbpass99")
 	if err != nil {
 		t.Fatalf("failed to insert test user: %v", err)
 	}
@@ -133,8 +123,8 @@ func TestAccount_XAuthRequestSubFallback(t *testing.T) {
 	h := handler.Account(database)
 
 	req := httptest.NewRequest(http.MethodGet, "/account", nil)
-	// Use X-Auth-Request-Sub instead of X-Forwarded-Sub.
 	req.Header.Set("X-Auth-Request-Sub", "sub-fallback")
+	req.Header.Set("X-Auth-Request-Preferred-Username", "Fallback")
 	rec := httptest.NewRecorder()
 
 	h.ServeHTTP(rec, req)
@@ -145,7 +135,7 @@ func TestAccount_XAuthRequestSubFallback(t *testing.T) {
 
 	body := rec.Body.String()
 	if !strings.Contains(body, "Fallback") {
-		t.Error("response body does not contain username from X-Auth-Request-Sub fallback")
+		t.Error("response body does not contain preferred_username")
 	}
 	if !strings.Contains(body, "fbpass99") {
 		t.Error("response body does not contain user password")
@@ -155,16 +145,15 @@ func TestAccount_XAuthRequestSubFallback(t *testing.T) {
 func TestAccount_SubFromJWT(t *testing.T) {
 	database := setupTestDB(t)
 
-	err := database.InsertUser("jwt-sub-123", "JWT User", "jwt@example.com", "emby-jwt", "jwtpass")
+	err := database.InsertUser("jwt-sub-123", "emby-jwt", "jwtpass")
 	if err != nil {
 		t.Fatalf("failed to insert test user: %v", err)
 	}
 
 	h := handler.Account(database)
 
-	// Build a JWT with a sub claim.
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"jwt-sub-123","email":"jwt@example.com"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"jwt-sub-123","preferred_username":"JWTUser"}`))
 	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesig"))
 	jwtToken := header + "." + payload + "." + signature
 
@@ -179,10 +168,35 @@ func TestAccount_SubFromJWT(t *testing.T) {
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "JWT User") {
-		t.Error("response body does not contain username")
+	if !strings.Contains(body, "JWTUser") {
+		t.Error("response body does not contain preferred_username from JWT")
 	}
 	if !strings.Contains(body, "jwtpass") {
 		t.Error("response body does not contain user password")
+	}
+}
+
+func TestExtractPreferredUsernameFromRequest_Header(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-Preferred-Username", "alice")
+
+	got := handler.ExtractPreferredUsernameFromRequest(req)
+	if got != "alice" {
+		t.Errorf("expected alice, got %q", got)
+	}
+}
+
+func TestExtractPreferredUsernameFromRequest_JWT(t *testing.T) {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"preferred_username":"bob"}`))
+	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesig"))
+	jwtToken := header + "." + payload + "." + signature
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+jwtToken)
+
+	got := handler.ExtractPreferredUsernameFromRequest(req)
+	if got != "bob" {
+		t.Errorf("expected bob, got %q", got)
 	}
 }

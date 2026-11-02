@@ -65,9 +65,9 @@ func buildUserPolicy(templatePolicy []byte) ([]byte, error) {
 }
 
 // extractClaimsFromJWT decodes the payload of a JWT token (without signature verification)
-// and extracts the "sub", "preferred_username", "name", "email", and "picture" claims.
+// and extracts the "sub", "preferred_username", "email", and "picture" claims.
 // Signature verification is not needed because the token was already validated by oauth2-proxy.
-func extractClaimsFromJWT(token string) (sub, preferredUsername, name, email, picture string) {
+func extractClaimsFromJWT(token string) (sub, preferredUsername, email, picture string) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return
@@ -86,7 +86,6 @@ func extractClaimsFromJWT(token string) (sub, preferredUsername, name, email, pi
 	}
 	var claims struct {
 		Sub               string `json:"sub"`
-		Name              string `json:"name"`
 		PreferredUsername string `json:"preferred_username"`
 		Email             string `json:"email"`
 		Picture           string `json:"picture"`
@@ -94,7 +93,7 @@ func extractClaimsFromJWT(token string) (sub, preferredUsername, name, email, pi
 	if json.Unmarshal(decoded, &claims) != nil {
 		return
 	}
-	return claims.Sub, claims.PreferredUsername, claims.Name, claims.Email, claims.Picture
+	return claims.Sub, claims.PreferredUsername, claims.Email, claims.Picture
 }
 
 // oidcClient is an HTTP client with a timeout for OIDC userinfo requests.
@@ -112,7 +111,6 @@ func AuthTokenFromContext(ctx context.Context) string {
 type OIDCHeaders struct {
 	Sub               string
 	PreferredUsername string
-	Name              string
 	Email             string
 	PictureURL        string
 }
@@ -122,18 +120,9 @@ func (h *OIDCHeaders) embyUsername() string {
 	return h.PreferredUsername
 }
 
-// displayName returns the best display name for logging/DB storage.
-// This is preferred_username > name (whichever is set first).
-func (h *OIDCHeaders) displayName() string {
-	if h.PreferredUsername != "" {
-		return h.PreferredUsername
-	}
-	return h.Name
-}
-
 // Auth returns middleware that extracts headers, provisions users, and authenticates with Emby.
 // Users are identified by their OIDC sub (subject) claim. The Emby account username is set to
-// the OIDC preferred_username claim. Name and email changes are synced automatically.
+// the OIDC preferred_username claim.
 func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templatePolicy []byte, oidcIssuerURL string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +147,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			}
 
 			// Try to extract claims from the JWT ID token.
-			var jwtSub, jwtPreferredUsername, jwtName, jwtEmail, jwtPicture string
+			var jwtSub, jwtPreferredUsername, jwtEmail, jwtPicture string
 			idToken := ""
 			authHeader := r.Header.Get("Authorization")
 			if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
@@ -171,7 +160,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 			}
 			if idToken != "" {
-				jwtSub, jwtPreferredUsername, jwtName, jwtEmail, jwtPicture = extractClaimsFromJWT(idToken)
+				jwtSub, jwtPreferredUsername, jwtEmail, jwtPicture = extractClaimsFromJWT(idToken)
 			}
 
 			// Preferred username: from headers or JWT.
@@ -181,17 +170,6 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			}
 			if preferredUsername == "" {
 				preferredUsername = jwtPreferredUsername
-			}
-
-			// Display name: from JWT "name" claim or X-Forwarded-User header.
-			// oauth2-proxy sets X-Forwarded-User to the "user" claim which defaults
-			// to "sub" (a UUID), not the human-readable display name.
-			displayName := jwtName
-			if displayName == "" {
-				displayName = r.Header.Get("X-Forwarded-User")
-				if displayName == "" {
-					displayName = r.Header.Get("X-Auth-Request-User")
-				}
 			}
 
 			// Fill in missing values from JWT claims.
@@ -205,12 +183,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				pictureURL = jwtPicture
 			}
 
-			// If displayName equals sub, it's likely oauth2-proxy sending the sub
-			// as X-Forwarded-User — don't use it as a display name.
-			if displayName == sub {
-				displayName = ""
-			}
-			// Same for preferredUsername — shouldn't be the sub.
+			// preferredUsername shouldn't be the sub UUID.
 			if preferredUsername == sub {
 				preferredUsername = ""
 			}
@@ -218,7 +191,6 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			headers := OIDCHeaders{
 				Sub:               sub,
 				PreferredUsername: preferredUsername,
-				Name:              displayName,
 				Email:             email,
 				PictureURL:        pictureURL,
 			}
@@ -287,7 +259,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 
 			slog.Info("processing authentication",
 				"sub", headers.Sub,
-				"name", headers.Name,
+				"preferred_username", headers.PreferredUsername,
 				"email", headers.Email,
 				"picture_url", headers.PictureURL,
 			)
@@ -316,37 +288,20 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					"emby_user_id", embyUserID,
 				)
 
-				// Sync name/email changes from OIDC to the bridge DB and Emby.
-				oldEmbyUsername := record.Name
-				if oldEmbyUsername == "" {
-					oldEmbyUsername = record.Email
-				}
-				nameChanged := headers.displayName() != record.Name || headers.Email != record.Email
-
-				if nameChanged {
-					// Update the bridge DB with new name/email.
-					if err := database.UpdateUserIdentity(headers.Sub, headers.displayName(), headers.Email); err != nil {
-						slog.Error("failed to update user identity in database",
-							"sub", headers.Sub,
-							"error", err,
-						)
-						// Non-fatal: continue with auth.
-					}
-
-					// If the Emby username changed, rename the user in Emby.
-					if embyUsername != oldEmbyUsername {
+				// Sync Emby username to OIDC preferred_username when it has drifted.
+				if embyUser, getErr := embyClient.GetUser(ctx, embyUserID); getErr == nil {
+					if embyUser.Name != embyUsername {
 						newName := embyUsername
-						// Check if the desired name is already taken by another user.
 						existingUser, lookupErr := embyClient.FindUserByName(ctx, newName)
 						if lookupErr == nil && existingUser != nil && existingUser.ID != embyUserID {
 							// Name is taken — keep the current Emby username.
-							newName = oldEmbyUsername
+							newName = embyUser.Name
 						}
 
-						if newName != oldEmbyUsername {
+						if newName != embyUser.Name {
 							slog.Info("syncing username change to Emby",
 								"sub", headers.Sub,
-								"old_name", oldEmbyUsername,
+								"old_name", embyUser.Name,
 								"new_name", newName,
 							)
 							if err := embyClient.UpdateUserName(ctx, embyUserID, newName); err != nil {
@@ -356,10 +311,11 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 									"new_name", newName,
 									"error", err,
 								)
-								// Non-fatal: continue with auth using old name.
-							} else {
-								embyUsername = newName
+								// Non-fatal: continue with auth using current Emby name.
+								embyUsername = embyUser.Name
 							}
+						} else {
+							embyUsername = embyUser.Name
 						}
 					}
 				}
@@ -451,7 +407,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 
 				// Store user in database.
-				if err := database.InsertUser(headers.Sub, headers.displayName(), headers.Email, embyUserID, userPassword); err != nil {
+				if err := database.InsertUser(headers.Sub, embyUserID, userPassword); err != nil {
 					slog.Error("failed to store user in database",
 						"sub", headers.Sub,
 						"emby_user_id", embyUserID,
@@ -577,7 +533,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 					}
 
 					// Store new record in DB.
-					if insErr := database.InsertUser(headers.Sub, headers.displayName(), headers.Email, embyUserID, userPassword); insErr != nil {
+					if insErr := database.InsertUser(headers.Sub, embyUserID, userPassword); insErr != nil {
 						slog.Error("failed to store re-provisioned user in database",
 							"sub", headers.Sub,
 							"error", insErr,

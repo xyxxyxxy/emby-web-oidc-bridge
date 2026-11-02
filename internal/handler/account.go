@@ -109,6 +109,55 @@ func ExtractSubFromRequest(r *http.Request) string {
 	return claims.Sub
 }
 
+// ExtractPreferredUsernameFromRequest extracts the OIDC preferred_username from headers or JWT.
+func ExtractPreferredUsernameFromRequest(r *http.Request) string {
+	preferredUsername := r.Header.Get("X-Forwarded-Preferred-Username")
+	if preferredUsername == "" {
+		preferredUsername = r.Header.Get("X-Auth-Request-Preferred-Username")
+	}
+	if preferredUsername != "" {
+		return preferredUsername
+	}
+
+	token := ""
+	authHeader := r.Header.Get("Authorization")
+	if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
+		token = authHeader[7:]
+	}
+	if token == "" {
+		token = r.Header.Get("X-Forwarded-Access-Token")
+		if token == "" {
+			token = r.Header.Get("X-Auth-Request-Access-Token")
+		}
+	}
+	if token == "" {
+		return ""
+	}
+
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload := parts[1]
+	switch len(payload) % 4 {
+	case 2:
+		payload += "=="
+	case 3:
+		payload += "="
+	}
+	decoded, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		PreferredUsername string `json:"preferred_username"`
+	}
+	if json.Unmarshal(decoded, &claims) != nil {
+		return ""
+	}
+	return claims.PreferredUsername
+}
+
 // Account returns an http.HandlerFunc for the /account endpoint.
 // Renders an HTML page showing the user's Emby username and password.
 func Account(database *db.DB) http.HandlerFunc {
@@ -116,6 +165,12 @@ func Account(database *db.DB) http.HandlerFunc {
 		sub := ExtractSubFromRequest(r)
 		if sub == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		username := ExtractPreferredUsernameFromRequest(r)
+		if username == "" {
+			http.Error(w, "Unauthorized: missing preferred_username", http.StatusUnauthorized)
 			return
 		}
 
@@ -128,12 +183,6 @@ func Account(database *db.DB) http.HandlerFunc {
 		if record == nil {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
-		}
-
-		// Emby username is name > email.
-		username := record.Name
-		if username == "" {
-			username = record.Email
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

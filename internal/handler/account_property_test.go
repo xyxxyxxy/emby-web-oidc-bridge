@@ -32,12 +32,11 @@ func TestAccountPageCredentialDisplay(t *testing.T) {
 		defer func() { _ = database.Close() }()
 
 		sub := rapid.StringMatching(`[a-z0-9]{8,20}`).Draw(t, "sub")
-		name := rapid.StringMatching(`[A-Za-z]{3,15}`).Draw(t, "name")
-		email := rapid.StringMatching(`[a-z]{3,10}@[a-z]{3,8}\.[a-z]{2,4}`).Draw(t, "email")
+		username := rapid.StringMatching(`[A-Za-z]{3,15}`).Draw(t, "username")
 		password := rapid.StringMatching(`[a-z0-9]{8}`).Draw(t, "password")
 		userID := rapid.StringMatching(`[a-f0-9]{32}`).Draw(t, "userID")
 
-		err = database.InsertUser(sub, name, email, userID, password)
+		err = database.InsertUser(sub, userID, password)
 		if err != nil {
 			t.Fatalf("InsertUser failed: %v", err)
 		}
@@ -46,6 +45,7 @@ func TestAccountPageCredentialDisplay(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodGet, "/account", nil)
 		req.Header.Set("X-Forwarded-Sub", sub)
+		req.Header.Set("X-Forwarded-Preferred-Username", username)
 		rec := httptest.NewRecorder()
 
 		h.ServeHTTP(rec, req)
@@ -56,9 +56,8 @@ func TestAccountPageCredentialDisplay(t *testing.T) {
 
 		body := rec.Body.String()
 
-		// Username should be the name (since it's non-empty).
-		if !strings.Contains(body, name) {
-			t.Fatalf("response body does not contain name %q", name)
+		if !strings.Contains(body, username) {
+			t.Fatalf("response body does not contain preferred_username %q", username)
 		}
 		if !strings.Contains(body, password) {
 			t.Fatalf("response body does not contain password %q", password)

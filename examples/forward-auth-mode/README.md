@@ -16,10 +16,10 @@ The bridge extracts user identity from the JWT ID token forwarded via the `Autho
 | Claim | Purpose |
 |-------|---------|
 | `sub` | Stable user identifier (required) — links OIDC identity to Emby account |
-| `preferred_username` | First choice for Emby username (e.g. "johndoe") |
-| `name` | Second choice for Emby username (e.g. "John Doe") |
-| `email` | Final fallback for Emby username; also stored for reference |
+| `preferred_username` | Emby username (required) |
 | `picture` | Profile image URL synced to Emby |
+
+Email/`name` are not used for Emby usernames and are not stored.
 
 ## Request Flow
 
