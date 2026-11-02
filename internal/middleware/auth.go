@@ -65,9 +65,9 @@ func buildUserPolicy(templatePolicy []byte) ([]byte, error) {
 }
 
 // extractClaimsFromJWT decodes the payload of a JWT token (without signature verification)
-// and extracts the "sub", "preferred_username", "email", and "picture" claims.
+// and extracts the "sub", "preferred_username", and "picture" claims.
 // Signature verification is not needed because the token was already validated by oauth2-proxy.
-func extractClaimsFromJWT(token string) (sub, preferredUsername, email, picture string) {
+func extractClaimsFromJWT(token string) (sub, preferredUsername, picture string) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return
@@ -87,13 +87,12 @@ func extractClaimsFromJWT(token string) (sub, preferredUsername, email, picture 
 	var claims struct {
 		Sub               string `json:"sub"`
 		PreferredUsername string `json:"preferred_username"`
-		Email             string `json:"email"`
 		Picture           string `json:"picture"`
 	}
 	if json.Unmarshal(decoded, &claims) != nil {
 		return
 	}
-	return claims.Sub, claims.PreferredUsername, claims.Email, claims.Picture
+	return claims.Sub, claims.PreferredUsername, claims.Picture
 }
 
 // oidcClient is an HTTP client with a timeout for OIDC userinfo requests.
@@ -111,7 +110,6 @@ func AuthTokenFromContext(ctx context.Context) string {
 type OIDCHeaders struct {
 	Sub               string
 	PreferredUsername string
-	Email             string
 	PictureURL        string
 }
 
@@ -131,10 +129,6 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			// Extract OIDC headers.
 			// Support both X-Forwarded-* (oauth2-proxy upstream mode) and
 			// X-Auth-Request-* (oauth2-proxy forward_auth/subrequest mode).
-			email := r.Header.Get("X-Forwarded-Email")
-			if email == "" {
-				email = r.Header.Get("X-Auth-Request-Email")
-			}
 			pictureURL := r.Header.Get("X-Forwarded-Picture")
 			if pictureURL == "" {
 				pictureURL = r.Header.Get("X-Auth-Request-Picture")
@@ -147,7 +141,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			}
 
 			// Try to extract claims from the JWT ID token.
-			var jwtSub, jwtPreferredUsername, jwtEmail, jwtPicture string
+			var jwtSub, jwtPreferredUsername, jwtPicture string
 			idToken := ""
 			authHeader := r.Header.Get("Authorization")
 			if len(authHeader) > 7 && strings.EqualFold(authHeader[:7], "bearer ") {
@@ -160,7 +154,7 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 				}
 			}
 			if idToken != "" {
-				jwtSub, jwtPreferredUsername, jwtEmail, jwtPicture = extractClaimsFromJWT(idToken)
+				jwtSub, jwtPreferredUsername, jwtPicture = extractClaimsFromJWT(idToken)
 			}
 
 			// Preferred username: from headers or JWT.
@@ -176,9 +170,6 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			if sub == "" {
 				sub = jwtSub
 			}
-			if email == "" {
-				email = jwtEmail
-			}
 			if pictureURL == "" && jwtPicture != "" {
 				pictureURL = jwtPicture
 			}
@@ -191,7 +182,6 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			headers := OIDCHeaders{
 				Sub:               sub,
 				PreferredUsername: preferredUsername,
-				Email:             email,
 				PictureURL:        pictureURL,
 			}
 
@@ -260,7 +250,6 @@ func Auth(embyClient *emby.Client, database *db.DB, templateUserID string, templ
 			slog.Info("processing authentication",
 				"sub", headers.Sub,
 				"preferred_username", headers.PreferredUsername,
-				"email", headers.Email,
 				"picture_url", headers.PictureURL,
 			)
 

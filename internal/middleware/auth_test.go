@@ -62,7 +62,6 @@ func TestAuth_MissingSub(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	// No sub header or JWT — should fail.
-	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -169,8 +168,6 @@ func TestAuth_ExistingUserInDB(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-alice")
 	req.Header.Set("X-Forwarded-Preferred-Username", "Alice")
-	req.Header.Set("X-Forwarded-User", "Alice")
-	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -259,8 +256,6 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-new")
 	req.Header.Set("X-Forwarded-Preferred-Username", "newuser")
-	req.Header.Set("X-Forwarded-User", "New User")
-	req.Header.Set("X-Forwarded-Email", "newuser@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -295,8 +290,8 @@ func TestAuth_NewUserProvisioning(t *testing.T) {
 	}
 }
 
-// TestAuth_EmailNotUsedAsUsername verifies that email alone is rejected without preferred_username.
-func TestAuth_EmailNotUsedAsUsername(t *testing.T) {
+// TestAuth_MissingPreferredUsernameRejected verifies missing preferred_username is rejected.
+func TestAuth_MissingPreferredUsernameRejected(t *testing.T) {
 	database, err := db.Open(testDBURI())
 	if err != nil {
 		t.Fatalf("failed to open db: %v", err)
@@ -312,7 +307,6 @@ func TestAuth_EmailNotUsedAsUsername(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-emailonly")
-	req.Header.Set("X-Forwarded-Email", "emailonly@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -379,8 +373,6 @@ func TestAuth_AdoptedUser(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-adopted")
 	req.Header.Set("X-Forwarded-Preferred-Username", "Adopted User")
-	req.Header.Set("X-Forwarded-User", "Adopted User")
-	req.Header.Set("X-Forwarded-Email", "adopted@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -429,7 +421,6 @@ func TestAuth_EmbyUnreachable(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-unreachable")
 	req.Header.Set("X-Forwarded-Preferred-Username", "unreachable")
-	req.Header.Set("X-Forwarded-Email", "unreachable@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -469,7 +460,6 @@ func TestAuth_UserCreationFailure(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-failcreate")
 	req.Header.Set("X-Forwarded-Preferred-Username", "failcreate")
-	req.Header.Set("X-Forwarded-Email", "failcreate@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -532,8 +522,6 @@ func TestAuth_AuthTokenInContext(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-ctx")
 	req.Header.Set("X-Forwarded-Preferred-Username", "Context User")
-	req.Header.Set("X-Forwarded-User", "Context User")
-	req.Header.Set("X-Forwarded-Email", "context@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -597,7 +585,7 @@ func TestAuth_SubFromJWT(t *testing.T) {
 
 	// Build a JWT with sub and preferred_username claims.
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"jwt-sub-001","preferred_username":"jwtuser","email":"jwt@example.com"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"jwt-sub-001","preferred_username":"jwtuser"}`))
 	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesig"))
 	jwtToken := header + "." + payload + "." + signature
 
@@ -686,7 +674,6 @@ func TestAuth_UsernameSync(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-rename")
 	req.Header.Set("X-Forwarded-Preferred-Username", "New Name")
-	req.Header.Set("X-Forwarded-Email", "user@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -702,34 +689,34 @@ func TestAuth_UsernameSync(t *testing.T) {
 	}
 }
 
-// TestExtractPictureFromJWT_ValidToken verifies picture extraction from a valid JWT payload.
-func TestExtractPictureFromJWT_ValidToken(t *testing.T) {
+// TestExtractClaimsFromJWT_Picture verifies picture extraction from a valid JWT payload.
+func TestExtractClaimsFromJWT_Picture(t *testing.T) {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user123","picture":"https://example.com/photo.jpg","email":"user@example.com"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user123","picture":"https://example.com/photo.jpg"}`))
 	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesignature"))
 	token := header + "." + payload + "." + signature
 
-	got := middleware.ExtractPictureFromJWT(token)
+	_, _, got := middleware.ExtractClaimsFromJWT(token)
 	if got != "https://example.com/photo.jpg" {
-		t.Errorf("ExtractPictureFromJWT = %q, want %q", got, "https://example.com/photo.jpg")
+		t.Errorf("picture = %q, want %q", got, "https://example.com/photo.jpg")
 	}
 }
 
-// TestExtractPictureFromJWT_NoPictureClaim verifies empty string when picture claim is absent.
-func TestExtractPictureFromJWT_NoPictureClaim(t *testing.T) {
+// TestExtractClaimsFromJWT_NoPictureClaim verifies empty picture when claim is absent.
+func TestExtractClaimsFromJWT_NoPictureClaim(t *testing.T) {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user123","email":"user@example.com"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"user123"}`))
 	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesignature"))
 	token := header + "." + payload + "." + signature
 
-	got := middleware.ExtractPictureFromJWT(token)
+	_, _, got := middleware.ExtractClaimsFromJWT(token)
 	if got != "" {
-		t.Errorf("ExtractPictureFromJWT = %q, want empty string", got)
+		t.Errorf("picture = %q, want empty string", got)
 	}
 }
 
-// TestExtractPictureFromJWT_InvalidToken verifies empty string for malformed tokens.
-func TestExtractPictureFromJWT_InvalidToken(t *testing.T) {
+// TestExtractClaimsFromJWT_InvalidToken verifies empty results for malformed tokens.
+func TestExtractClaimsFromJWT_InvalidToken(t *testing.T) {
 	tests := []struct {
 		name  string
 		token string
@@ -743,16 +730,16 @@ func TestExtractPictureFromJWT_InvalidToken(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := middleware.ExtractPictureFromJWT(tt.token)
-			if got != "" {
-				t.Errorf("ExtractPictureFromJWT(%q) = %q, want empty string", tt.token, got)
+			sub, preferred, picture := middleware.ExtractClaimsFromJWT(tt.token)
+			if sub != "" || preferred != "" || picture != "" {
+				t.Errorf("ExtractClaimsFromJWT(%q) = (%q,%q,%q), want empty", tt.token, sub, preferred, picture)
 			}
 		})
 	}
 }
 
-// TestExtractPictureFromJWT_PaddingVariants verifies base64 padding handling.
-func TestExtractPictureFromJWT_PaddingVariants(t *testing.T) {
+// TestExtractClaimsFromJWT_PaddingVariants verifies base64 padding handling.
+func TestExtractClaimsFromJWT_PaddingVariants(t *testing.T) {
 	tests := []struct {
 		name    string
 		claims  map[string]string
@@ -777,9 +764,9 @@ func TestExtractPictureFromJWT_PaddingVariants(t *testing.T) {
 			payload := base64.RawURLEncoding.EncodeToString(payloadJSON)
 			token := header + "." + payload + ".sig"
 
-			got := middleware.ExtractPictureFromJWT(token)
+			_, _, got := middleware.ExtractClaimsFromJWT(token)
 			if got != tt.wantPic {
-				t.Errorf("ExtractPictureFromJWT = %q, want %q", got, tt.wantPic)
+				t.Errorf("picture = %q, want %q", got, tt.wantPic)
 			}
 		})
 	}
@@ -884,7 +871,7 @@ func TestAuth_PreferredUsernameOverName(t *testing.T) {
 
 	// Build JWT with both preferred_username and name.
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"sub-pref","preferred_username":"johndoe","name":"John Doe","email":"john@example.com"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"sub-pref","preferred_username":"johndoe"}`))
 	signature := base64.RawURLEncoding.EncodeToString([]byte("fakesig"))
 	jwtToken := header + "." + payload + "." + signature
 
@@ -935,8 +922,6 @@ func TestAuth_UsernameCreationConflict(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-conflict")
 	req.Header.Set("X-Forwarded-Preferred-Username", "johndoe")
-	req.Header.Set("X-Forwarded-User", "John Doe")
-	req.Header.Set("X-Forwarded-Email", "john@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -1014,8 +999,6 @@ func TestAuth_PolicyUpdateSkippedWhenAlreadyCorrect(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-policy-skip")
 	req.Header.Set("X-Forwarded-Preferred-Username", "PolicySkip")
-	req.Header.Set("X-Forwarded-User", "PolicySkip")
-	req.Header.Set("X-Forwarded-Email", "policyskip@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -1098,8 +1081,6 @@ func TestAuth_PolicyUpdateCalledWhenDisabled(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-policy-disabled")
 	req.Header.Set("X-Forwarded-Preferred-Username", "PolicyDisabled")
-	req.Header.Set("X-Forwarded-User", "PolicyDisabled")
-	req.Header.Set("X-Forwarded-Email", "policydisabled@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
@@ -1180,8 +1161,6 @@ func TestAuth_PolicyUpdateCalledWhenPrefAccessEnabled(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-Sub", "sub-policy-pref")
 	req.Header.Set("X-Forwarded-Preferred-Username", "PolicyPref")
-	req.Header.Set("X-Forwarded-User", "PolicyPref")
-	req.Header.Set("X-Forwarded-Email", "policypref@example.com")
 	rr := httptest.NewRecorder()
 
 	handler.ServeHTTP(rr, req)
