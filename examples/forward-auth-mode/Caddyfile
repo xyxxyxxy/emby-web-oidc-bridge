@@ -13,9 +13,9 @@ emby.example.com {
             uri /oauth2/auth
 
             # Copy identity headers from the auth response to the upstream request.
-            # Authorization carries the JWT ID token (contains sub, name, preferred_username, picture).
-            # X-Auth-Request-Email and X-Auth-Request-Preferred-Username are fallbacks.
-            copy_headers X-Auth-Request-User X-Auth-Request-Email X-Auth-Request-Preferred-Username Authorization
+            # Authorization carries the JWT ID token (contains sub, preferred_username, picture).
+            # X-Auth-Request-Preferred-Username is a fallback for Emby username.
+            copy_headers X-Auth-Request-User X-Auth-Request-Preferred-Username Authorization
 
             # Redirect to sign-in on 401
             @error status 401
