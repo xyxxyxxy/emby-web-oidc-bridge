@@ -90,6 +90,12 @@ func Proxy(embyURL string, invalidateSession func(string)) http.Handler {
 				req.URL.Path = target.Path + req.URL.Path
 			}
 
+			// Emby uses the first X-Forwarded-For address as the client IP.
+			// X-Real-IP is supplied by the trusted upstream proxy chain.
+			if realIP := req.Header.Get("X-Real-IP"); realIP != "" {
+				req.Header.Set("X-Forwarded-For", realIP)
+			}
+
 			// Forward the authenticated session token if present in context.
 			token := AuthTokenFromContext(req.Context())
 			if token != "" {
